@@ -7,7 +7,7 @@ use std::time::Duration;
 
 /// Deployment settings for a subprocess worker, independent of the application runtime.
 /// Configure these before discovery or connection; enabling remains explicit.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubprocessOptions {
     pub program: PathBuf,
     pub args: Vec<OsString>,

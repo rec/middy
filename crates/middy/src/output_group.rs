@@ -41,6 +41,9 @@ pub struct OutputGroup {
     client: Option<transport::Output>,
     patterns: Vec<String>,
     subprocess: Option<transport::subprocess::SubprocessOptions>,
+    scanner: transport::scanner::Subscription,
+    revision: Option<u64>,
+    backend: transport::Backend,
     destinations: Vec<Destination>,
     failure: Option<Arc<midi::Error>>,
 }
@@ -55,11 +58,17 @@ impl OutputGroup {
                 "port pattern must not be empty".into(),
             )));
         }
+        let backend = client.backend;
+        let scanner = transport::scanner::Subscription::new(backend, false, subprocess.clone())
+            .map_err(midi::Error::Connect)?;
         let mut group = Self {
             encoding: client.encoding,
             client: Some(client),
             patterns,
             subprocess,
+            scanner,
+            revision: None,
+            backend,
             destinations: Vec::new(),
             failure: None,
         };
@@ -70,11 +79,15 @@ impl OutputGroup {
         self.failure.clone()
     }
     fn refresh(&mut self) -> midi::Result<()> {
-        let client = self.client.as_ref().ok_or(midi::Error::Closed)?;
-        let ports = client.ports().map_err(midi::Error::Connect)?;
-        let visible: Vec<_> = transport::port_keys(&ports)
-            .into_iter()
+        let snapshot = self.scanner.snapshot().map_err(midi::Error::Connect)?;
+        if self.revision == Some(snapshot.revision) {
+            return Ok(());
+        }
+        let visible: Vec<_> = snapshot
+            .ports
+            .iter()
             .filter(|p| self.patterns.iter().any(|s| port_matches(s, &p.name)))
+            .cloned()
             .collect();
         let mut i = 0;
         while i < self.destinations.len() {
@@ -92,14 +105,10 @@ impl OutputGroup {
             if self.destinations.iter().any(|p| p.key == key) {
                 continue;
             }
-            let port = ports
-                .iter()
-                .find(|p| p.name() == key.name && p.backend_id() == key.id)
-                .expect("visible output");
-            let info = PortInfo::new(key.name.clone(), port.backend(), key.id)?;
+            let info = PortInfo::new(key.name.clone(), self.backend, key.id)?;
             let options = transport::OutputOptions {
-                backend: Some(port.backend()),
-                encoding: port.backend().encoding(),
+                backend: Some(self.backend),
+                encoding: self.encoding,
             };
             let opened = (|| {
                 let child = if let Some(options_worker) = &self.subprocess {
@@ -139,6 +148,7 @@ impl OutputGroup {
                 }
             }
         }
+        self.revision = Some(snapshot.revision);
         Ok(())
     }
     fn broadcast(

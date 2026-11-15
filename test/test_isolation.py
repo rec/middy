@@ -9,7 +9,9 @@ import subprocess
 import sys
 import warnings
 import weakref
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -824,10 +826,29 @@ def output_topology(
     log = tmp_path / "output-log"
     topology.write_text("Synth A\nSynth B\nOther\n")
     log.write_text("")
+    log.with_suffix(".scans").write_text("")
     monkeypatch.setenv("MIDDY_TEST_MODE", "broadcast")
     monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
     monkeypatch.setenv("MIDDY_TEST_OUTPUT_LOG", str(log))
+    monkeypatch.setenv("MIDDY_TEST_SCAN_LOG", str(log.with_suffix(".scans")))
     return topology, log
+
+
+def change_outputs(topology: Path, log: Path, names: str) -> None:
+    pending = topology.with_suffix(".pending")
+    pending.write_text(names)
+    pending.replace(topology)
+    expected = names.replace("\n", "|")
+    deadline = monotonic() + 3
+    while (
+        sum(
+            s.split("\t")[2] == expected
+            for s in log.with_suffix(".scans").read_text().splitlines()
+        )
+        < 2
+    ):
+        assert monotonic() < deadline, "shared scanner did not observe topology"
+        sleep(0.005)
 
 
 def output_packets(log: Path) -> list[tuple[str, str]]:
@@ -838,6 +859,42 @@ def output_packets(log: Path) -> list[tuple[str, str]]:
     ]
 
 
+def test_inputs_and_outputs_share_scans_independently_of_send_rate(
+    output_topology: tuple[Path, Path],
+) -> None:
+    _, log = output_topology
+    scans = log.with_suffix(".scans")
+    with ExitStack() as stack:
+        inputs = [
+            stack.enter_context(midi.Input(port=[], run_in_subprocess=True))
+            for _ in range(3)
+        ]
+        outputs = [
+            stack.enter_context(midi.Output(port="Synth A", run_in_subprocess=True))
+            for _ in range(3)
+        ]
+        before = len(scans.read_text().splitlines())
+        start = monotonic()
+        for _ in range(100):
+            for o in outputs:
+                o.send(messages.TimingClock())
+        sleep(0.35)
+        records = scans.read_text().splitlines()
+        budget = 2 * (int((monotonic() - start) / 0.1) + 2)
+        assert len(records) - before <= budget
+        counts = Counter(tuple(s.split("\t")[:2]) for s in records)
+        assert sum(d == "true" for _, d in counts) == 1
+        assert sum(d == "false" for _, d in counts) == 4
+        assert sum(n > 1 for n in counts.values()) == 2
+        inputs[0].close()
+        sleep(0.15)
+        assert len(scans.read_text().splitlines()) > len(records)
+    sleep(0.15)
+    stopped = scans.read_text()
+    sleep(0.15)
+    assert scans.read_text() == stopped
+
+
 @pytest.mark.parametrize("port", ["Synth *", ["Synth *", "* A"]])
 def test_output_broadcast_follows_new_matches_and_cleans_only_what_each_port_received(
     output_topology: tuple[Path, Path], port: str | list[str]
@@ -845,9 +902,9 @@ def test_output_broadcast_follows_new_matches_and_cleans_only_what_each_port_rec
     topology, log = output_topology
     with midi.Output(port=port, run_in_subprocess=True) as output:
         assert output.send(messages.NoteOn(60)).sent_events == 1
-        topology.write_text("Synth A\nSynth B\nSynth C\nOther\n")
+        change_outputs(topology, log, "Synth A\nSynth B\nSynth C\nOther\n")
         output.send(messages.NoteOn(61))
-        topology.write_text("Synth A\nSynth C\nOther\n")
+        change_outputs(topology, log, "Synth A\nSynth C\nOther\n")
         output.send(messages.NoteOn(62))
     packets = output_packets(log)
     assert [v for n, v in packets if n == "Synth A"] == [
@@ -873,6 +930,28 @@ def test_output_broadcast_follows_new_matches_and_cleans_only_what_each_port_rec
     assert all(n != "Other" for n, _ in packets)
 
 
+def test_shared_scan_failure_reaches_each_output_subscriber(
+    output_topology: tuple[Path, Path],
+) -> None:
+    topology, _ = output_topology
+    outputs = [
+        midi.Output(port="Synth A", run_in_subprocess=True).connect() for _ in range(2)
+    ]
+    pending = topology.with_suffix(".pending")
+    pending.write_text("!fail!\n")
+    pending.replace(topology)
+    deadline = monotonic() + 3
+    with pytest.raises(midi.ConnectError, match="device enumeration failed"):
+        while monotonic() < deadline:
+            outputs[0].send(messages.TimingClock())
+            sleep(0.005)
+    with pytest.raises(midi.ConnectError, match="device enumeration failed"):
+        outputs[1].send(messages.TimingClock())
+    for o in outputs:
+        with pytest.raises(midi.StateError):
+            o.close()
+
+
 def test_default_output_still_selects_the_first_device(
     output_topology: tuple[Path, Path],
 ) -> None:
@@ -887,7 +966,7 @@ def test_output_can_open_before_any_selected_device_is_connected(
 ) -> None:
     topology, log = output_topology
     with midi.Output(port=("Future *",), run_in_subprocess=True) as output:
-        topology.write_text("Synth A\nFuture Synth\n")
+        change_outputs(topology, log, "Synth A\nFuture Synth\n")
         output.send(messages.TimingClock())
     assert output_packets(log) == [("Future Synth", "b:f8")]
 

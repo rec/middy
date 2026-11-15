@@ -41,12 +41,36 @@ fn output_fixture(names: &str) -> (PathBuf, PathBuf, SubprocessOptions) {
     let log = fixture().with_extension("output-log");
     std::fs::write(&topology, names).unwrap();
     std::fs::write(&log, "").unwrap();
+    let scans = log.with_extension("scans");
+    std::fs::write(&scans, "").unwrap();
     let mut worker = options("broadcast");
     worker.args.extend([
         topology.clone().into_os_string(),
         log.clone().into_os_string(),
+        "0".into(),
+        scans.into_os_string(),
     ]);
     (topology, log, worker)
+}
+fn change_outputs(topology: &std::path::Path, log: &std::path::Path, names: &str) {
+    let pending = topology.with_extension("pending");
+    std::fs::write(&pending, names).unwrap();
+    std::fs::rename(pending, topology).unwrap();
+    let expected = names.replace('\n', "|");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while std::fs::read_to_string(log.with_extension("scans"))
+        .unwrap()
+        .lines()
+        .filter(|s| s.split('\t').nth(2) == Some(expected.as_str()))
+        .count()
+        < 2
+    {
+        assert!(
+            Instant::now() < deadline,
+            "shared scanner did not observe topology"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 fn sent_to(log: &std::path::Path, name: &str) -> Vec<String> {
     std::fs::read_to_string(log)
@@ -57,6 +81,83 @@ fn sent_to(log: &std::path::Path, name: &str) -> Vec<String> {
             (fields[0] == name && fields[2] != "close").then(|| fields[2].to_owned())
         })
         .collect()
+}
+#[test]
+fn inputs_and_outputs_share_polling_and_sending_does_not_trigger_scans() {
+    use std::collections::BTreeMap;
+    let _serial = SERIAL.lock().unwrap();
+    let (_, log, worker) = output_fixture("Synth\n");
+    let mut inputs = Vec::new();
+    let mut outputs = Vec::new();
+    for _ in 0..3 {
+        let mut input = Input::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker.clone())
+            .unwrap()
+            .with_port(std::iter::empty::<&str>())
+            .unwrap();
+        assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
+        inputs.push(input);
+        let mut output = Output::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker.clone())
+            .unwrap()
+            .with_port("Synth")
+            .unwrap();
+        output.send(middy::TimingClock::new().unwrap()).unwrap();
+        outputs.push(output);
+    }
+    let scans = log.with_extension("scans");
+    let before = std::fs::read_to_string(&scans).unwrap().lines().count();
+    let start = Instant::now();
+    for _ in 0..100 {
+        for output in &mut outputs {
+            output.send(middy::TimingClock::new().unwrap()).unwrap();
+        }
+    }
+    std::thread::sleep(Duration::from_millis(350));
+    let records = std::fs::read_to_string(&scans).unwrap();
+    let budget = 2 * (start.elapsed().as_millis() / 100 + 2) as usize;
+    assert!(records.lines().count() - before <= budget);
+    let mut calls = BTreeMap::new();
+    for record in records.lines() {
+        let mut fields = record.split('\t');
+        *calls
+            .entry((fields.next().unwrap(), fields.next().unwrap()))
+            .or_insert(0) += 1;
+    }
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|((_, input), _)| *input == "true")
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|((_, input), _)| *input == "false")
+            .count(),
+        4
+    );
+    assert_eq!(calls.values().filter(|n| **n > 1).count(), 2);
+    inputs.pop().unwrap().close().unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(std::fs::read_to_string(&scans).unwrap().lines().count() > records.lines().count());
+    for input in &mut inputs {
+        input.close().unwrap();
+    }
+    for output in &mut outputs {
+        output.close().unwrap();
+    }
+    drop(inputs);
+    drop(outputs);
+    std::thread::sleep(Duration::from_millis(150));
+    let stopped = std::fs::read_to_string(&scans).unwrap();
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(std::fs::read_to_string(&scans).unwrap(), stopped);
 }
 #[test]
 fn selected_outputs_follow_new_matches_and_keep_independent_cleanup_state() {
@@ -78,9 +179,9 @@ fn selected_outputs_follow_new_matches_and_keep_independent_cleanup_state() {
             output.send(NoteOn::new(60).unwrap()).unwrap().sent_events,
             1
         );
-        std::fs::write(&topology, "Synth A\nSynth B\nSynth C\nOther\n").unwrap();
+        change_outputs(&topology, &log, "Synth A\nSynth B\nSynth C\nOther\n");
         output.send(NoteOn::new(61).unwrap()).unwrap();
-        std::fs::write(&topology, "Synth A\nSynth C\nOther\n").unwrap();
+        change_outputs(&topology, &log, "Synth A\nSynth C\nOther\n");
         output.send(NoteOn::new(62).unwrap()).unwrap();
         output.close().unwrap();
         assert_eq!(
@@ -99,12 +200,39 @@ fn selected_outputs_follow_new_matches_and_keep_independent_cleanup_state() {
     }
 }
 #[test]
+fn shared_scan_failure_reaches_each_input_subscriber() {
+    let _serial = SERIAL.lock().unwrap();
+    let (topology, _, worker) = output_fixture("Synth\n");
+    let mut inputs = Vec::new();
+    for _ in 0..2 {
+        let mut input = Input::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker.clone())
+            .unwrap()
+            .with_port(std::iter::empty::<&str>())
+            .unwrap();
+        assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
+        inputs.push(input);
+    }
+    let pending = topology.with_extension("pending");
+    std::fs::write(&pending, "!fail!\n").unwrap();
+    std::fs::rename(pending, topology).unwrap();
+    for input in &mut inputs {
+        let error = input
+            .receive(Some(Duration::from_secs(3)), None)
+            .unwrap_err();
+        assert!(error.to_string().contains("device enumeration failed"));
+        let _ = input.close();
+    }
+}
+#[test]
 fn broadcast_failure_reports_destinations_and_partial_command_progress() {
     use middy::events::PlaybackCause;
     let _serial = SERIAL.lock().unwrap();
     for compound in [false, true] {
         let (_, log, mut worker) = output_fixture("Good\nFail\nLater\n");
-        worker.args.push(if compound { "1" } else { "0" }.into());
+        worker.args[3] = if compound { "1" } else { "0" }.into();
         let mut output = Output::new()
             .with_run_in_subprocess(true)
             .unwrap()

@@ -63,6 +63,29 @@ fn output_log(port: &str, index: i128, value: &str) {
     file.write_all(format!("{port}\t{index}\t{value}\n").as_bytes())
         .unwrap();
 }
+fn scan_log(input: bool, names: &str) {
+    let Some(path) = std::env::args()
+        .nth(5)
+        .or_else(|| std::env::var("MIDDY_TEST_SCAN_LOG").ok())
+    else {
+        return;
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(
+        format!(
+            "{}\t{}\t{}\n",
+            std::process::id(),
+            input,
+            names.replace('\n', "|")
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+}
 fn main() {
     let mode = std::env::args()
         .nth(1)
@@ -109,6 +132,11 @@ fn main() {
                         .or_else(|| std::env::var("MIDDY_TEST_PORTS").ok())
                         .unwrap();
                     let ports = std::fs::read_to_string(path).unwrap();
+                    scan_log(input, &ports);
+                    if ports == "!fail!\n" {
+                        error("native", "device enumeration failed", false, 0);
+                        continue;
+                    }
                     port_names = ports.lines().map(str::to_owned).collect();
                     ok(
                         "ok",

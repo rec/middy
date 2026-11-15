@@ -84,8 +84,9 @@ notes, rests, messages and delays share one sequence.
 
 `Output::new().with_port("FLOW 8")?` sends to all matching outputs; shell patterns
 support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`, just as in Python. A collection
-selects the union of matches, opening each port once. Matches refresh before each
-send, including newly connected devices, without replaying earlier messages.
+selects the union of matches, opening each port once. Inputs and outputs share one
+device scanner polling every 100 ms. Sends use its cached device list, including
+newly connected devices, without replaying earlier messages.
 Omitting the selector keeps the first output. Empty patterns are rejected;
 sending with no matching ports fails. For example:
 

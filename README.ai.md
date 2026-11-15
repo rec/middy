@@ -60,8 +60,10 @@ An explicit Output(channel=N) overrides MIDI 1 message and note channels.
 collection such as `["Synth *", "Pad[12]"]`. Rust accepts the same selectors via
 `with_port`. Matching is the union of case-sensitive name substrings and shell
 patterns, with overlapping matches opened once. Omitting `port` selects the first
-output. Explicit selectors refresh before each send, including devices connected
-later; new devices receive subsequent messages without replay. `connect(snapshot)`
+output. Inputs and selected outputs share one process-wide device scanner, polling
+every 100 ms. Each active backend/direction/worker configuration is enumerated once
+per cycle, regardless of client count. Outputs use its cached topology when
+sending; new devices receive subsequent messages without replay. `connect(snapshot)`
 still selects one discovered device. Empty or currently unmatched selections can
 open, but sending with no matching outputs raises an error.
 Raw `NoteOn` values can still overlap, with

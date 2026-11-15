@@ -1,9 +1,8 @@
 //! Shared hot-plug subscription used by the Rust input and Python facade.
 use super::*;
 use crate::{events, live};
-use std::sync::{mpsc, Condvar};
+use std::sync::{atomic::AtomicBool, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 pub enum AllItem {
     Decoded(live::Item),
@@ -116,12 +115,13 @@ impl Drop for DiscoveryGuard {
     }
 }
 
-/// Owns discovery and a connection per visible input. Explicit close joins the
-/// discovery thread and drains accepted deliveries before returning the client.
+/// Follows the shared scanner and owns a connection per visible input. Explicit
+/// close joins the follower and drains accepted deliveries before returning the client.
 pub struct AllInputConnection {
     pending: Arc<std::sync::atomic::AtomicUsize>,
     activity: Arc<Mutex<Option<std::time::Instant>>>,
-    stop: Arc<(Mutex<bool>, Condvar)>,
+    stop: Arc<AtomicBool>,
+    scanner: scanner::Subscription,
     thread: Option<JoinHandle<Result<Input>>>,
     failure: Arc<FailureState>,
     clock: Clock,
@@ -184,8 +184,8 @@ impl AllInputConnection {
             .map_err(|_| Error::Worker("input discovery thread panicked".into()))?
     }
     fn signal_stop(&self) {
-        *self.stop.0.lock().unwrap_or_else(|p| p.into_inner()) = true;
-        self.stop.1.notify_all();
+        self.stop.store(true, Ordering::Release);
+        self.scanner.wake();
     }
 }
 impl Drop for AllInputConnection {
@@ -222,9 +222,11 @@ impl Input {
             receive_byte_limit: self.limit,
         };
         let clock = self.clock;
+        let scanner = scanner::Subscription::new(clock.backend, true, subprocess.clone())?;
+        let discovery = scanner.clone();
         let failure = Arc::clone(&self.failure);
         let thread_failure = Arc::clone(&failure);
-        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         let dropped = Arc::new(AtomicU64::new(0));
         let loss = Arc::clone(&dropped);
@@ -235,7 +237,7 @@ impl Input {
         let last_message = Arc::clone(&activity);
         let (ready, started) = mpsc::sync_channel(1);
         let thread = thread::Builder::new()
-            .name("middy-input-discovery".into())
+            .name("middy-input-follower".into())
             .spawn(move || {
                 let _guard = DiscoveryGuard(Arc::clone(&thread_failure));
                 let mut topology = Topology {
@@ -245,11 +247,13 @@ impl Input {
                 let mut retired_loss = 0u64;
                 let result = (|| {
                     loop {
-                        if *stopped.0.lock().unwrap_or_else(|p| p.into_inner()) {
+                        if stopped.load(Ordering::Acquire) {
                             break;
                         }
-                        let visible = port_keys(&self.ports()?)
-                            .into_iter()
+                        let snapshot = discovery.snapshot()?;
+                        let visible = snapshot
+                            .ports
+                            .iter()
                             .filter(|p| {
                                 patterns.as_ref().is_none_or(|patterns| {
                                     patterns
@@ -257,6 +261,7 @@ impl Input {
                                         .any(|s| crate::output::port_matches(s, &p.name))
                                 })
                             })
+                            .cloned()
                             .collect();
                         let removed = topology.update(visible, |key| {
                             let client = if let Some(subprocess) = &subprocess {
@@ -406,16 +411,7 @@ impl Input {
                             let _ = ready.send(Ok(()));
                             initialized = true;
                         }
-                        let guard = stopped.0.lock().unwrap_or_else(|p| p.into_inner());
-                        if *guard {
-                            break;
-                        }
-                        drop(
-                            stopped
-                                .1
-                                .wait_timeout(guard, Duration::from_millis(100))
-                                .unwrap_or_else(|p| p.into_inner()),
-                        );
+                        discovery.wait(snapshot.revision, &stopped);
                     }
                     Ok(())
                 })();
@@ -454,6 +450,7 @@ impl Input {
             Ok(()) => Ok(AllInputConnection {
                 pending,
                 stop,
+                scanner,
                 thread: Some(thread),
                 failure,
                 clock,

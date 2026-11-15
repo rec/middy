@@ -10,6 +10,7 @@
 pub mod all;
 mod ffi;
 mod native;
+pub(crate) mod scanner;
 pub mod subprocess;
 mod worker;
 
@@ -260,6 +261,7 @@ pub struct Output {
     failure: Arc<FailureState>,
     worker: Worker<Native>,
     pub(crate) encoding: Encoding,
+    pub(crate) backend: Backend,
 }
 
 /// Owns the client until close returns it. Drop retires delivery immediately;
@@ -275,6 +277,7 @@ pub struct OutputConnection {
     failure: Arc<FailureState>,
     worker: Worker<Native>,
     encoding: Encoding,
+    backend: Backend,
 }
 
 /// Read-only worker failure information, retained independently of native handles.
@@ -532,6 +535,7 @@ impl Output {
             failure: Arc::new(FailureState::default()),
             worker,
             encoding: options.encoding,
+            backend,
         })
     }
     pub fn new_subprocess(
@@ -565,6 +569,7 @@ impl Output {
             failure,
             worker,
             encoding: options.encoding,
+            backend,
         })
     }
     pub fn ports(&self) -> Result<Vec<Port>> {
@@ -584,6 +589,7 @@ impl Output {
             failure: self.failure,
             worker: self.worker,
             encoding: self.encoding,
+            backend: self.backend,
         })
     }
 }
@@ -727,6 +733,7 @@ impl OutputConnection {
             failure: self.failure,
             worker: self.worker,
             encoding: self.encoding,
+            backend: self.backend,
         })
     }
 }

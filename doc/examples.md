@@ -35,7 +35,8 @@ for message in md.Input():
 
 `Input()` listens to all inputs exposed by the selected backend and encoding,
 including devices connected after opening. It can open with no devices present;
-discovery runs every 100 ms. `Input(port='Keyboard')` follows all ports matching
+inputs and outputs share one device scanner running every 100 ms.
+`Input(port='Keyboard')` follows all ports matching
 that name substring or shell pattern, just like `Input(port=['Keyboard'])`.
 Connect one snapshot returned by `input.ports()` to select exactly one device.
 
@@ -59,7 +60,7 @@ retain these descriptions. Constructed messages and files without port metadata
 have `port=None`.
 
 `Output()` selects the first output. Supplying a string or collection sends to
-all matches, checking for new devices before each send. New devices receive
+all matches, using the shared scanner's cached device list. New devices receive
 subsequent messages without replay. Overlapping patterns open each port once;
 sending with no matching ports raises an error.
 
