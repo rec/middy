@@ -176,6 +176,8 @@ pub struct Port {
 }
 
 impl Port {
+    /// UTF-8 name, with invalid native byte sequences replaced by U+FFFD.
+    /// Names are not Unicode-normalized and need not be unique.
     pub fn name(&self) -> &str {
         &self.name
     }

@@ -101,7 +101,7 @@ The fork fixes are separate commits:
   The sanitized coremidi_keeper_test covers creation failure/retry, concurrent
   MIDI 1/UMP creation and reopening, observers and borrowed-context ownership.
 
-No additional local modifications are applied to the imported files. Included
+The local UTF-8 name conversion patch is described below. Included
 paths are `CMakeLists.txt`, `cmake/`, `include/`, `src/`, `LICENSE.md`, `README.md`,
 `tests/include_catch.hpp`, `tests/unit/`, and `tests/integration/`. Upstream
 examples, documentation, CI files, and the large MIDI file test corpus are
@@ -115,6 +115,12 @@ The upstream license texts are retained in [LICENSE.md](LICENSE.md). Preserve
 their notices when linking this source into distributed wheels and binaries.
 
 ## Regression checks
+
+Local patch: `backends/coremidi/helpers.hpp` interprets names supplied to
+`toCFString` as UTF-8 instead of ASCII. Middy's
+`high_level_virtual_ports_preserve_messages_and_terminal_close` regression uses
+accented text and an emoji through virtual-port creation, discovery and connection
+for both byte and UMP transports and both port directions.
 
 `tests/unit/coremidi_properties.cpp` supplies deterministic CoreMIDI property
 getter stubs. A failed integer query does not write its output. String values

@@ -343,8 +343,7 @@ impl Native {
                 // SAFETY: native port_name.data()/size() remain valid in port.
                 unsafe { std::slice::from_raw_parts(name.cast::<u8>(), size) }
             };
-            let name = String::from_utf8(copy(bytes)?)
-                .map_err(|_| Error::Invalid("native port name is not UTF-8".into()))?;
+            let name = decoded_port_name(bytes)?;
             ports.push(Port {
                 owner: Arc::downgrade(&self.identity),
                 generation: self.generation,
@@ -657,6 +656,22 @@ pub(super) fn port_name(name: &str) -> Result<CString> {
     CString::new(name).map_err(|_| Error::Invalid("port name must not contain NUL".into()))
 }
 
+fn decoded_port_name(bytes: &[u8]) -> Result<String> {
+    let mut name = String::new();
+    for chunk in bytes.utf8_chunks() {
+        let replacement = if chunk.invalid().is_empty() {
+            ""
+        } else {
+            "�"
+        };
+        name.try_reserve(chunk.valid().len() + replacement.len())
+            .map_err(|_| Error::Resource("port name allocation failed".into()))?;
+        name.push_str(chunk.valid());
+        name.push_str(replacement);
+    }
+    Ok(name)
+}
+
 pub(super) fn copy<T: Copy>(data: &[T]) -> Result<Vec<T>> {
     let mut owned = Vec::new();
     owned
@@ -822,6 +837,23 @@ mod tests {
     use super::super::Clock;
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn port_names_preserve_unicode_and_replace_invalid_utf8_sequences() {
+        for name in ["", "Keyboard", "Clavier é 🎹", "e\u{301}", "a\0b"] {
+            assert_eq!(decoded_port_name(name.as_bytes()).unwrap(), name);
+        }
+        for (bytes, expected) in [
+            (&b"Keyboard \xff\xfe"[..], "Keyboard ��"),
+            (
+                &b"Clavier \xc3\xa9 \xf0\x9f\x8e\xb9 \xe2\x82"[..],
+                "Clavier é 🎹 �",
+            ),
+            (&b"\xe2(\xa1"[..], "�(�"),
+        ] {
+            assert_eq!(decoded_port_name(bytes).unwrap(), expected);
+        }
+    }
 
     fn receiver(
         mode: TimestampMode,

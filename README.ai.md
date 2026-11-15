@@ -132,7 +132,11 @@ decisions.
 `midi.Input()` decodes received packets into events; `midi.Input(raw=True)`
 returns unchanged transport packets. `midi.Output` owns discovery and one connection, supporting `out.send(...)` for messages, compound operations and
 encoded bytes/UMP packets and timestamped sources. All use the same
-native transport. Inputs and outputs default to in-process
+native transport. Discovered port names are decoded as UTF-8, replacing invalid
+byte sequences with U+FFFD (`�`) in both APIs. Valid Unicode is preserved without
+normalization. Names need not be unique, including after replacement; discovery
+snapshots retain distinct native port handles independently of their names.
+Inputs and outputs default to in-process
 transport, with `run_in_subprocess=True` available. Inputs
 provide either a callback or `receive(timeout=..., cancel=...)`, returning an
 immutable `messages.Message` or `events.StreamDiagnostic`. Messages carry optional

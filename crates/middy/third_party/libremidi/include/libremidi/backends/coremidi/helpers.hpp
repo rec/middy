@@ -59,7 +59,7 @@ get_int_property(MIDIObjectRef object, CFStringRef property, OSStatus& status) n
 
 LIBREMIDI_STATIC CFString_handle toCFString(std::string_view str) noexcept
 {
-  return CFString_handle{CFStringCreateWithCString(nullptr, str.data(), kCFStringEncodingASCII)};
+  return CFString_handle{CFStringCreateWithCString(nullptr, str.data(), kCFStringEncodingUTF8)};
 }
 
 #if TARGET_OS_IPHONE

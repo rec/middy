@@ -340,7 +340,7 @@ fn high_level_virtual_ports_preserve_messages_and_terminal_close() {
     enable();
     for encoding in [Encoding::Bytes, Encoding::Ump] {
         for virtual_input in [true, false] {
-            let name = format!("high-level-{encoding:?}-{virtual_input}");
+            let name = format!("Clavier é 🎹-{encoding:?}-{virtual_input}");
             let mut input = midi::Input::new()
                 .with_transport(InputOptions {
                     encoding,
