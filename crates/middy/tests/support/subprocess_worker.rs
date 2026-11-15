@@ -50,6 +50,19 @@ fn hang() -> ! {
         std::thread::park();
     }
 }
+fn output_log(port: &str, index: i128, value: &str) {
+    let path = std::env::args()
+        .nth(3)
+        .or_else(|| std::env::var("MIDDY_TEST_OUTPUT_LOG").ok())
+        .unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(format!("{port}\t{index}\t{value}\n").as_bytes())
+        .unwrap();
+}
 fn main() {
     let mode = std::env::args()
         .nth(1)
@@ -61,6 +74,10 @@ fn main() {
     let mut timestamps = true;
     let mut snapshot = 0;
     let mut dropped = 0;
+    let mut port_names = Vec::new();
+    let mut opened_port = String::new();
+    let mut opened_index = 0;
+    let mut accepted = 0usize;
     let mut source = io::stdin();
     let mut magic = [0; 8];
     source.read_exact(&mut magic).unwrap();
@@ -86,11 +103,23 @@ fn main() {
             }
             "ports" => {
                 snapshot += 1;
-                if mode == "hotplug" {
-                    let path = std::env::args().nth(2)
-                        .or_else(|| std::env::var("MIDDY_TEST_PORTS").ok()).unwrap();
+                if mode == "hotplug" || mode == "broadcast" {
+                    let path = std::env::args()
+                        .nth(2)
+                        .or_else(|| std::env::var("MIDDY_TEST_PORTS").ok())
+                        .unwrap();
                     let ports = std::fs::read_to_string(path).unwrap();
-                    ok("ok", Value::List(ports.lines().map(|name| Value::Tuple(vec![text(name), i(0)])).collect()), dropped);
+                    port_names = ports.lines().map(str::to_owned).collect();
+                    ok(
+                        "ok",
+                        Value::List(
+                            ports
+                                .lines()
+                                .map(|name| Value::Tuple(vec![text(name), i(0)]))
+                                .collect(),
+                        ),
+                        dropped,
+                    );
                     continue;
                 }
                 if mode == "discovery_error_once" && snapshot == 1 {
@@ -115,6 +144,10 @@ fn main() {
                 );
             }
             "open" => {
+                if mode == "broadcast" {
+                    opened_index = n(&args[0]);
+                    opened_port = port_names[opened_index as usize].clone();
+                }
                 if mode == "failed_open" {
                     error("native", "device vanished during connect", true, 0);
                     return;
@@ -141,7 +174,13 @@ fn main() {
                 }
                 if matches!(
                     mode.as_str(),
-                    "early" | "early_negative" | "early_absent" | "twice" | "burst" | "hotplug" | "fragment"
+                    "early"
+                        | "early_negative"
+                        | "early_absent"
+                        | "twice"
+                        | "burst"
+                        | "hotplug"
+                        | "fragment"
                 ) {
                     let data = if mode == "fragment" {
                         Value::Bytes(vec![0xf0, 0x7d, 1])
@@ -223,6 +262,55 @@ fn main() {
                     return;
                 }
                 let packets = tuple(args[0].clone());
+                if mode == "broadcast" {
+                    let fail_after = std::env::args()
+                        .nth(4)
+                        .or_else(|| std::env::var("MIDDY_TEST_FAIL_AFTER").ok())
+                        .and_then(|s| s.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    for (index, packet) in packets.iter().enumerate() {
+                        if opened_port == "Fail" && accepted >= fail_after {
+                            if operation == "send_command" {
+                                send(
+                                    "error",
+                                    Value::Tuple(vec![
+                                        Value::Tuple(vec![
+                                            text("compound"),
+                                            Value::Tuple(vec![
+                                                i(index as u64),
+                                                i(packets.len() as u64),
+                                                Value::Tuple(vec![
+                                                    text("native"),
+                                                    text("destination failed"),
+                                                ]),
+                                            ]),
+                                        ]),
+                                        Value::Bool(true),
+                                        i(0),
+                                    ]),
+                                );
+                            } else {
+                                error("native", "destination failed", true, 0);
+                            }
+                            return;
+                        }
+                        let value = match packet {
+                            Value::Bytes(bytes) => format!(
+                                "b:{}",
+                                bytes.iter().map(|v| format!("{v:02x}")).collect::<String>()
+                            ),
+                            Value::Words(words) => format!(
+                                "u:{}",
+                                words.iter().map(|v| format!("{v:08x}")).collect::<String>()
+                            ),
+                            _ => panic!("packet expected"),
+                        };
+                        output_log(&opened_port, opened_index, &value);
+                        accepted += 1;
+                    }
+                    ok("ok", Value::Null, 0);
+                    continue;
+                }
                 if mode.starts_with("partial_command_") {
                     let completed = mode.rsplit('_').next().unwrap().parse::<u64>().unwrap();
                     let cause = Value::Tuple(vec![text("native"), text("device disconnected")]);
@@ -288,6 +376,9 @@ fn main() {
                 ok("ok", Value::Null, dropped);
             }
             "close" | "shutdown" => {
+                if mode == "broadcast" && !opened_port.is_empty() {
+                    output_log(&opened_port, opened_index, "close");
+                }
                 if mode == "hang_close" {
                     hang();
                 }

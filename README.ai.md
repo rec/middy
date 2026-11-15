@@ -56,13 +56,28 @@ as `Note("500 ms", 60)` retain their meaning at every tempo. Explicit beats need
 
 Output() preserves message channels and supplies channel 1 when unassigned.
 An explicit Output(channel=N) overrides MIDI 1 message and note channels.
-`Output(port="FLOW 8")` selects a unique name substring or wildcard match;
-omission selects the first output. Raw `NoteOn` values can still overlap, with
+`Output(port="FLOW 8")` sends to all matching outputs; `port` also accepts a
+collection such as `["Synth *", "Pad[12]"]`. Rust accepts the same selectors via
+`with_port`. Matching is the union of case-sensitive name substrings and shell
+patterns, with overlapping matches opened once. Omitting `port` selects the first
+output. Explicit selectors refresh before each send, including devices connected
+later; new devices receive subsequent messages without replay. `connect(snapshot)`
+still selects one discovered device. Empty or currently unmatched selections can
+open, but sending with no matching outputs raises an error.
+Raw `NoteOn` values can still overlap, with
 explicit delays and releases. Delays use the same tempo rule as notes and rests.
 Explicit MIDI 1 close releases outstanding notes and resets changed pitch bend,
 CC1/64/66/67, and channel/polyphonic pressure. It leaves volume, pan, expression,
 programs and tuning alone. UMP retains explicit addressing and does not support
 full-note values or automatic cleanup.
+
+Broadcast cleanup tracks each destination separately. A send stops at its first
+failure and reports `BroadcastSendError` with `completed_ports`, `failed_port`,
+`total_ports` and the underlying exception in `__cause__`. Rust exposes the same
+fields in `midi::BroadcastSendError`, through `midi::Error::BroadcastSend` (possibly
+wrapped in `Error::Shared`). Compound failures retain their per-message progress
+in the cause. Playback event counts count each fully delivered logical event
+once. Close attempts cleanup and closure for every destination even after failure.
 
 ## Files, typed I/O and exact time
 

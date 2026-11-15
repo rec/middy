@@ -11,35 +11,14 @@ pub enum AllItem {
 }
 type Delivery = Arc<Mutex<Box<dyn FnMut(AllItem) + Send>>>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Key {
-    name: String,
-    id: u64,
-    occurrence: usize,
-}
-fn keys(ports: &[Port]) -> Vec<Key> {
-    let mut result: Vec<Key> = Vec::new();
-    for port in ports {
-        let occurrence = result
-            .iter()
-            .filter(|p| p.name == port.name && p.id == port.backend_id)
-            .count();
-        result.push(Key {
-            name: port.name.clone(),
-            id: port.backend_id,
-            occurrence,
-        });
-    }
-    result
-}
 struct Topology<C> {
-    sources: Vec<(Key, C)>,
+    sources: Vec<(PortKey, C)>,
 }
 impl<C> Topology<C> {
     fn update(
         &mut self,
-        visible: Vec<Key>,
-        mut open: impl FnMut(&Key) -> Result<Option<C>>,
+        visible: Vec<PortKey>,
+        mut open: impl FnMut(&PortKey) -> Result<Option<C>>,
     ) -> Result<Vec<C>> {
         for key in &visible {
             if !self.sources.iter().any(|(k, _)| k == key) {
@@ -260,7 +239,7 @@ impl Input {
             .spawn(move || {
                 let _guard = DiscoveryGuard(Arc::clone(&thread_failure));
                 let mut topology = Topology {
-                    sources: Vec::<(Key, Source)>::new(),
+                    sources: Vec::<(PortKey, Source)>::new(),
                 };
                 let mut initialized = false;
                 let mut retired_loss = 0u64;
@@ -269,7 +248,7 @@ impl Input {
                         if *stopped.0.lock().unwrap_or_else(|p| p.into_inner()) {
                             break;
                         }
-                        let visible = keys(&self.ports()?)
+                        let visible = port_keys(&self.ports()?)
                             .into_iter()
                             .filter(|p| {
                                 patterns.as_ref().is_none_or(|patterns| {
@@ -396,7 +375,9 @@ impl Input {
                             });
                             let connection = match connection {
                                 Ok(connection) => connection,
-                                Err(_) if !keys(&self.ports()?).contains(key) => return Ok(None),
+                                Err(_) if !port_keys(&self.ports()?).contains(key) => {
+                                    return Ok(None)
+                                }
                                 Err(error) => return Err(error),
                             };
                             Ok(Some(Source {
@@ -492,12 +473,12 @@ mod tests {
     use super::*;
     #[test]
     fn discovery_attaches_new_ports_and_retires_only_removed_connections() {
-        let a = Key {
+        let a = PortKey {
             name: "Keyboard".into(),
             id: 1,
             occurrence: 0,
         };
-        let b = Key {
+        let b = PortKey {
             name: "Keyboard".into(),
             id: 1,
             occurrence: 1,
@@ -506,7 +487,7 @@ mod tests {
             sources: Vec::new(),
         };
         let mut serial = 0;
-        let mut open = |_: &Key| {
+        let mut open = |_: &PortKey| {
             serial += 1;
             Ok(Some(serial))
         };

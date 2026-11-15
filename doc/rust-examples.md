@@ -82,9 +82,23 @@ advances the sequence. `Duration` always means elapsed time, even with a tempo;
 `Beats` requires a tempo. Clocks and scheduling are automatic. `.into()` lets
 notes, rests, messages and delays share one sequence.
 
-`Output::new().with_port("FLOW 8")?` selects a unique name substring; shell patterns
-support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`, just as in Python. Empty patterns
-are rejected. To choose from discovery, use:
+`Output::new().with_port("FLOW 8")?` sends to all matching outputs; shell patterns
+support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`, just as in Python. A collection
+selects the union of matches, opening each port once. Matches refresh before each
+send, including newly connected devices, without replaying earlier messages.
+Omitting the selector keeps the first output. Empty patterns are rejected;
+sending with no matching ports fails. For example:
+
+```rust
+use middy::{Note, Output};
+use std::time::Duration;
+
+let mut output = Output::new().with_port(["Synth *", "Pad[12]"])?;
+output.send(Note::new(Duration::from_millis(500), 60)?)?;
+output.close()?;
+```
+
+To choose one device from discovery, use:
 
 ```rust
 use middy::midi::Output;

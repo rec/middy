@@ -8,8 +8,12 @@ use crate::transport::{self, Encoding, Packet, Port};
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::Duration;
+#[path = "output_group.rs"]
+mod group;
+#[doc(hidden)]
+pub use group::OutputGroup;
 
-/// Open the first output lazily, or select a unique name with `with_port`.
+/// Open the first output lazily, or follow all matches with `with_port`.
 /// Explicit channels override MIDI 1 message channels; otherwise assigned
 /// channels survive and unassigned channels become channel 1. Raw packets and
 /// native UMP values retain their addresses. Drop releases confirmed MIDI 1
@@ -35,7 +39,7 @@ pub struct Output {
     options: transport::OutputOptions,
     run_in_subprocess: bool,
     subprocess_options: transport::subprocess::SubprocessOptions,
-    port: Option<String>,
+    port: Option<Vec<String>>,
     channel: Option<u8>,
     bpm: Option<Rational>,
     playback: PlaybackOptions,
@@ -223,17 +227,19 @@ impl Output {
         self.bpm = Some(bpm);
         Ok(self)
     }
-    /// Case-sensitive substring or shell pattern (`*`, `?`, `[abc]`, `[!abc]`) matching. Multiple
-    /// matching ports are an error, including duplicate names.
-    pub fn with_port(mut self, pattern: impl Into<String>) -> crate::midi::Result<Self> {
+    /// Follow all outputs matching a string or collection of shell patterns/name substrings.
+    pub fn with_port<K>(
+        mut self,
+        patterns: impl crate::input::PortPatterns<K>,
+    ) -> crate::midi::Result<Self> {
         if self.connection.is_some() || self.closed {
             return Err(invalid("output is already connected or closed").into());
         }
-        let pattern = pattern.into();
-        if pattern.is_empty() {
+        let patterns = patterns.into_patterns();
+        if patterns.iter().any(String::is_empty) {
             return Err(invalid("port pattern must not be empty").into());
         }
-        self.port = Some(pattern);
+        self.port = Some(patterns);
         Ok(self)
     }
     pub fn with_run_in_subprocess(mut self, enabled: bool) -> crate::midi::Result<Self> {
@@ -455,6 +461,7 @@ impl Output {
                 .as_ref()
                 .is_some_and(|c| c.worker_failure().is_some())
             || matches!(&self.connection, Some(Connection::Native(c)) if c.worker_failure().is_some())
+            || matches!(&self.connection, Some(Connection::Group(c)) if c.failure().is_some())
     }
     /// Cleanup covers held note counts, pitch bend, CC1/64/66/67 and channel/poly
     /// pressure changed by confirmed sends. Other controller/program state is
@@ -478,7 +485,7 @@ impl Output {
         }
         self.client = None;
         if let Some(connection) = self.connection.take() {
-            let closed = connection.close().map_err(transport_error);
+            let closed = connection.close().map_err(io::Error::from);
             if result.is_ok() {
                 result = closed;
             } else if let Err(error) = closed {
@@ -511,8 +518,20 @@ impl Output {
             ));
         }
         if self.connection.is_none() {
+            if let Some(patterns) = &self.port {
+                let patterns = patterns.clone();
+                self.client()?;
+                let client = self.client.take().expect("initialized output client");
+                self.connection = Some(Connection::Group(OutputGroup::new(
+                    client,
+                    patterns,
+                    self.run_in_subprocess
+                        .then(|| self.subprocess_options.clone()),
+                )?));
+                return Ok(());
+            }
             let ports = self.ports()?;
-            let selected = select_port(&ports, self.port.as_deref())?;
+            let selected = select_port(&ports, None)?;
             let client = self.client.take().expect("discovery initialized client");
             self.connection =
                 Some(Connection::Native(client.connect(selected).map_err(
@@ -673,13 +692,14 @@ impl Output {
     }
     fn transmit(&mut self, prepared: Prepared) -> io::Result<()> {
         let connection = self.connection.as_mut().expect("connected output");
+        let tracked = !matches!(connection, Connection::Group(_));
         match prepared {
             Prepared::Packet(packet) => {
-                connection
-                    .send(&packet)
-                    .map_err(|e| io::Error::from(crate::midi::Error::Send(e)))?;
+                connection.send(&packet).map_err(io::Error::from)?;
                 if let Packet::Bytes(bytes) = packet {
-                    self.state.feed(&bytes)?;
+                    if tracked {
+                        self.state.feed(&bytes)?;
+                    }
                 }
                 Ok(())
             }
@@ -687,15 +707,16 @@ impl Output {
                 let result = connection.send_command(&command);
                 let completed = match &result {
                     Ok(()) => packets.len(),
-                    Err(transport::Error::CompoundSend {
-                        completed_messages, ..
-                    }) => completed_messages.unwrap_or(0),
+                    Err(crate::midi::Error::Send(transport::Error::CompoundSend {
+                        completed_messages,
+                        ..
+                    })) => completed_messages.unwrap_or(0),
                     Err(_) => 0,
                 };
-                for bytes in packets.iter().take(completed) {
+                for bytes in packets.iter().take(if tracked { completed } else { 0 }) {
                     self.state.feed(bytes)?;
                 }
-                result.map_err(|e| io::Error::from(crate::midi::Error::Send(e)))
+                result.map_err(io::Error::from)
             }
         }
     }
@@ -733,20 +754,28 @@ fn replay_message(record: io::Result<crate::archive::Record>) -> Option<io::Resu
 }
 enum Connection {
     Native(transport::OutputConnection),
+    Group(OutputGroup),
     #[cfg(test)]
     Test(std::rc::Rc<std::cell::RefCell<crate::testing::Output>>),
 }
 impl Connection {
-    fn send(&mut self, packet: &Packet) -> transport::Result<()> {
+    fn send(&mut self, packet: &Packet) -> crate::midi::Result<()> {
         match self {
-            Self::Native(connection) => connection.send(packet),
+            Self::Native(connection) => connection.send(packet).map_err(crate::midi::Error::Send),
+            Self::Group(group) => group.send(packet),
             #[cfg(test)]
-            Self::Test(connection) => connection.borrow_mut().send(packet.clone()),
+            Self::Test(connection) => connection
+                .borrow_mut()
+                .send(packet.clone())
+                .map_err(crate::midi::Error::Send),
         }
     }
-    fn send_command(&mut self, command: &AnyCommand) -> transport::Result<()> {
+    fn send_command(&mut self, command: &AnyCommand) -> crate::midi::Result<()> {
         match self {
-            Self::Native(connection) => connection.send_command(command),
+            Self::Native(connection) => connection
+                .send_command(command)
+                .map_err(crate::midi::Error::Send),
+            Self::Group(group) => group.send_command(command),
             #[cfg(test)]
             Self::Test(connection) => {
                 let packets = command.expand().expect("prepared command");
@@ -754,19 +783,25 @@ impl Connection {
                     connection
                         .borrow_mut()
                         .send(Packet::Bytes(message.encode().expect("resolved command")))
-                        .map_err(|cause| transport::Error::CompoundSend {
-                            completed_messages: Some(index),
-                            total_messages: packets.len(),
-                            cause: Box::new(cause),
+                        .map_err(|cause| {
+                            crate::midi::Error::Send(transport::Error::CompoundSend {
+                                completed_messages: Some(index),
+                                total_messages: packets.len(),
+                                cause: Box::new(cause),
+                            })
                         })?;
                 }
                 Ok(())
             }
         }
     }
-    fn close(self) -> transport::Result<()> {
+    fn close(self) -> crate::midi::Result<()> {
         match self {
-            Self::Native(connection) => connection.close().map(drop),
+            Self::Native(connection) => connection
+                .close()
+                .map(drop)
+                .map_err(crate::midi::Error::Transport),
+            Self::Group(group) => group.close().map(drop),
             #[cfg(test)]
             Self::Test(connection) => {
                 connection.borrow_mut().close();

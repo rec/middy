@@ -9,6 +9,7 @@ from ufor.tuning import Computed, FrequencyTable, IntervalPattern, RatioTable, T
 __all__: list[str] = [
     "ActiveSensing",
     "Backend",
+    "BroadcastSendError",
     "CallbackThreadError",
     "Cancellation",
     "CapabilityError",
@@ -221,6 +222,7 @@ from .messages import (
 from .metrics import Distribution, Histogram
 from .midi import (
     Backend,
+    BroadcastSendError,
     CallbackThreadError,
     CapabilityError,
     CompoundSendError,

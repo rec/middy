@@ -175,6 +175,28 @@ pub struct Port {
     name: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PortKey {
+    pub name: String,
+    pub id: u64,
+    pub occurrence: usize,
+}
+pub(crate) fn port_keys(ports: &[Port]) -> Vec<PortKey> {
+    let mut result: Vec<PortKey> = Vec::new();
+    for port in ports {
+        let occurrence = result
+            .iter()
+            .filter(|p| p.name == port.name && p.id == port.backend_id)
+            .count();
+        result.push(PortKey {
+            name: port.name.clone(),
+            id: port.backend_id,
+            occurrence,
+        });
+    }
+    result
+}
+
 impl Port {
     /// UTF-8 name, with invalid native byte sequences replaced by U+FFFD.
     /// Names are not Unicode-normalized and need not be unique.
@@ -237,7 +259,7 @@ pub struct Input {
 pub struct Output {
     failure: Arc<FailureState>,
     worker: Worker<Native>,
-    encoding: Encoding,
+    pub(crate) encoding: Encoding,
 }
 
 /// Owns the client until close returns it. Drop retires delivery immediately;

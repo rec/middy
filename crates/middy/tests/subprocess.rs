@@ -35,6 +35,154 @@ fn options(mode: &str) -> SubprocessOptions {
         timeout: Duration::from_secs(1),
     }
 }
+
+fn output_fixture(names: &str) -> (PathBuf, PathBuf, SubprocessOptions) {
+    let topology = fixture().with_extension("outputs");
+    let log = fixture().with_extension("output-log");
+    std::fs::write(&topology, names).unwrap();
+    std::fs::write(&log, "").unwrap();
+    let mut worker = options("broadcast");
+    worker.args.extend([
+        topology.clone().into_os_string(),
+        log.clone().into_os_string(),
+    ]);
+    (topology, log, worker)
+}
+fn sent_to(log: &std::path::Path, name: &str) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .filter_map(|s| {
+            let fields: Vec<_> = s.split('\t').collect();
+            (fields[0] == name && fields[2] != "close").then(|| fields[2].to_owned())
+        })
+        .collect()
+}
+#[test]
+fn selected_outputs_follow_new_matches_and_keep_independent_cleanup_state() {
+    let _serial = SERIAL.lock().unwrap();
+    for collection in [false, true] {
+        let (topology, log, worker) = output_fixture("Synth A\nSynth B\nOther\n");
+        let output = Output::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker)
+            .unwrap();
+        let mut output = if collection {
+            output.with_port(["Synth *", "* A"])
+        } else {
+            output.with_port("Synth *")
+        }
+        .unwrap();
+        assert_eq!(
+            output.send(NoteOn::new(60).unwrap()).unwrap().sent_events,
+            1
+        );
+        std::fs::write(&topology, "Synth A\nSynth B\nSynth C\nOther\n").unwrap();
+        output.send(NoteOn::new(61).unwrap()).unwrap();
+        std::fs::write(&topology, "Synth A\nSynth C\nOther\n").unwrap();
+        output.send(NoteOn::new(62).unwrap()).unwrap();
+        output.close().unwrap();
+        assert_eq!(
+            sent_to(&log, "Synth A"),
+            ["b:903c5a", "b:903d5a", "b:903e5a", "b:803c00", "b:803d00", "b:803e00"]
+        );
+        assert_eq!(
+            sent_to(&log, "Synth B"),
+            ["b:903c5a", "b:903d5a", "b:803c00", "b:803d00"]
+        );
+        assert_eq!(
+            sent_to(&log, "Synth C"),
+            ["b:903d5a", "b:903e5a", "b:803d00", "b:803e00"]
+        );
+        assert!(sent_to(&log, "Other").is_empty());
+    }
+}
+#[test]
+fn broadcast_failure_reports_destinations_and_partial_command_progress() {
+    use middy::events::PlaybackCause;
+    let _serial = SERIAL.lock().unwrap();
+    for compound in [false, true] {
+        let (_, log, mut worker) = output_fixture("Good\nFail\nLater\n");
+        worker.args.push(if compound { "1" } else { "0" }.into());
+        let mut output = Output::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker)
+            .unwrap()
+            .with_port("*")
+            .unwrap();
+        let failure = if compound {
+            output
+                .send(middy::ControlChange::new_with_resolution(1, 10000, 14).unwrap())
+                .unwrap_err()
+        } else {
+            output.send(NoteOn::new(60).unwrap()).unwrap_err()
+        };
+        assert_eq!(failure.report.sent_events, 0);
+        let PlaybackCause::Send(midi::Error::Shared(error)) = failure.cause else {
+            panic!("broadcast error expected")
+        };
+        let midi::Error::BroadcastSend(error) = error.as_ref() else {
+            panic!("destination progress expected")
+        };
+        assert_eq!(
+            error
+                .completed_ports
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Good"]
+        );
+        assert_eq!(error.failed_port.name, "Fail");
+        assert_eq!(error.total_ports, 3);
+        if compound {
+            assert!(matches!(
+                &*error.cause,
+                midi::Error::Send(transport::Error::CompoundSend {
+                    completed_messages: Some(1),
+                    ..
+                })
+            ));
+        }
+        assert!(output.close().is_err());
+        assert!(sent_to(&log, "Later").is_empty());
+        assert!(sent_to(&log, "Good")
+            .contains(&if compound { "b:b00100" } else { "b:803c00" }.to_owned()));
+    }
+}
+#[test]
+fn default_output_stays_single_and_selected_ump_outputs_do_not_generate_midi1_cleanup() {
+    let _serial = SERIAL.lock().unwrap();
+    let (_, log, worker) = output_fixture("Synth\nSynth\nOther\n");
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap();
+    output.send(middy::TimingClock::new().unwrap()).unwrap();
+    output.close().unwrap();
+    assert_eq!(sent_to(&log, "Synth"), ["b:f8"]);
+    let (_, log, worker) = output_fixture("Synth\nSynth\nOther\n");
+    let mut output = Output::new()
+        .with_transport(transport::OutputOptions {
+            encoding: transport::Encoding::Ump,
+            backend: None,
+        })
+        .unwrap()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port(["Synth", "Synth*"])
+        .unwrap();
+    output
+        .send(transport::Packet::Ump(vec![0x20903c64]))
+        .unwrap();
+    output.close().unwrap();
+    assert_eq!(sent_to(&log, "Synth"), ["u:20903c64", "u:20903c64"]);
+    assert!(sent_to(&log, "Other").is_empty());
+}
 #[test]
 fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() {
     use middy::{events::InputItem, messages::Message};

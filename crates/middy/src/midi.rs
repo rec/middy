@@ -2,7 +2,7 @@
 
 pub use crate::input::{Input, InputErrors, PortPatterns, Recording, RecordingOptions};
 #[doc(hidden)]
-pub use crate::output::{select_port_index, OutputState};
+pub use crate::output::{select_port_index, OutputGroup, OutputState};
 pub use crate::output::{Output, OutputSource, OutputValue, PlaybackOptions};
 pub use crate::transport::subprocess::SubprocessOptions;
 pub use crate::transport::{compiled_backends, Backend, Encoding, Port, TimestampMode};
@@ -20,6 +20,32 @@ pub enum Error {
     /// A retained failure also available through Input::failure().
     Shared(std::sync::Arc<Error>),
     Value(crate::messages::ValueError),
+    /// A broadcast stopped after some destinations accepted the current event.
+    BroadcastSend(Box<BroadcastSendError>),
+}
+#[derive(Debug)]
+pub struct BroadcastSendError {
+    pub completed_ports: Vec<crate::events::PortInfo>,
+    pub failed_port: crate::events::PortInfo,
+    pub total_ports: usize,
+    pub cause: Box<Error>,
+}
+impl std::fmt::Display for BroadcastSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "broadcast to {} failed after {}/{} destinations: {}",
+            self.failed_port.name,
+            self.completed_ports.len(),
+            self.total_ports,
+            self.cause
+        )
+    }
+}
+impl std::error::Error for BroadcastSendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
 }
 
 impl std::fmt::Display for Error {
@@ -31,6 +57,7 @@ impl std::fmt::Display for Error {
             Self::Cancelled => f.write_str("MIDI receive cancelled"),
             Self::Shared(e) => e.fmt(f),
             Self::Value(e) => e.fmt(f),
+            Self::BroadcastSend(error) => error.fmt(f),
         }
     }
 }
@@ -43,6 +70,7 @@ impl std::error::Error for Error {
             Self::Closed | Self::Cancelled => return None,
             Self::Shared(e) => e.as_ref(),
             Self::Value(e) => e,
+            Self::BroadcastSend(error) => error.as_ref(),
         })
     }
 }

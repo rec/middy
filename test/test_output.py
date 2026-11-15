@@ -10,20 +10,25 @@ from time import monotonic
 
 import pytest
 
-from middy import codecs, events, messages, midi, testing
+from middy import _native, codecs, events, messages, midi, testing
 
 
 class NativeConnection:
+    worker_failure = None
+
     def __init__(self) -> None:
         self.sink = testing.Output(encoding="bytes")
         self.closed = False
         self.fail_release = False
         self.partial: int | None = None
+        self.group_state: _native.OutputState | None = None
 
     def send(self, packet: bytes) -> None:
         if self.fail_release and packet[0] & 0xF0 == 0x80:
             raise midi.SendError("release failed")
         self.sink.send(packet)
+        if self.group_state is not None:
+            self.group_state.feed(packet)
 
     def send_command(
         self, command: messages.ControlChange | messages.ParameterStep
@@ -32,8 +37,14 @@ class NativeConnection:
             if self.partial == i:
                 raise midi.CompoundSendError("partial", i, 2)
             self.sink.send(message)
+            if self.group_state is not None:
+                self.group_state.feed(codecs.encode(message))
 
     def close(self) -> None:
+        if self.group_state is not None:
+            state, self.group_state = self.group_state, None
+            for message in state.cleanup():
+                self.send(codecs.encode(message))
         self.closed = True
 
     def __enter__(self) -> NativeConnection:
@@ -48,8 +59,6 @@ class NativeConnection:
 
 @pytest.fixture
 def transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[NativeConnection]:
-    from middy import _native
-
     connection = NativeConnection()
 
     class Client:
@@ -63,6 +72,10 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[NativeConnection]:
             ]
 
         def connect(self, port: midi.Port) -> NativeConnection:
+            return connection
+
+        def connect_matching(self, patterns: list[str]) -> NativeConnection:
+            connection.group_state = _native.OutputState()
             return connection
 
     monkeypatch.setattr(_native, "Output", Client)
@@ -318,28 +331,6 @@ def test_compound_failure_cleanup_uses_confirmed_prefix(
             out.send(messages.ControlChange(1, 128, resolution=14))
     assert transport.packets() == [b"\xb0\x01\x01", b"\xb0\x01\x00"]
     assert transport.closed
-
-
-@pytest.mark.parametrize("pattern", ["missing", "*"])
-def test_port_patterns_require_one_match(
-    transport: NativeConnection, pattern: str
-) -> None:
-    with pytest.raises(ValueError, match="expected one"):
-        with midi.Output(port=pattern):
-            pass
-    assert transport.packets() == []
-
-
-@pytest.mark.parametrize(
-    "pattern", ["FLOW [0-9] MIDI", "[FO]LOW ? MIDI", "[!A-E]LOW*", "FLOW [!9] MIDI"]
-)
-def test_port_selection_supports_shell_character_classes(
-    transport: NativeConnection,
-    pattern: str,
-) -> None:
-    with midi.Output(port=pattern) as out:
-        out.send(messages.ProgramChange(1))
-    assert transport.packets() == [b"\xc0\x00"]
 
 
 def test_empty_port_patterns_are_rejected_before_discovery() -> None:

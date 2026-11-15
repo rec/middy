@@ -44,6 +44,21 @@ class PortInfoError(MidiError): ...
 class ConnectError(MidiError): ...
 class SendError(MidiError): ...
 
+class BroadcastSendError(SendError):
+    def __init__(
+        self,
+        message: str,
+        completed_ports: list[events.PortInfo],
+        failed_port: events.PortInfo,
+        total_ports: int,
+    ) -> None: ...
+    @property
+    def completed_ports(self) -> list[events.PortInfo]: ...
+    @property
+    def failed_port(self) -> events.PortInfo: ...
+    @property
+    def total_ports(self) -> int: ...
+
 class CompoundSendError(SendError):
     def __init__(
         self, message: str, completed_messages: int | None, total_messages: int
@@ -230,7 +245,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
 class Output(ResourceModel):
     channel: int | None
     bpm: int | float | None
-    port: str | None
+    port: str | list[str] | None
     encoding: Encoding
     backend: Backend | None
     run_in_subprocess: bool
@@ -243,7 +258,7 @@ class Output(ResourceModel):
         *,
         channel: int | None = None,
         bpm: int | float | str | None = None,
-        port: str | None = None,
+        port: str | Iterable[str] | None = None,
         encoding: Encoding = Encoding.Bytes,
         backend: Backend | None = None,
         run_in_subprocess: bool = False,
@@ -275,7 +290,7 @@ class Output(ResourceModel):
     def ports(self) -> list[Port]: ...
     @property
     def worker_failure(self) -> Exception | None: ...
-    def connect(self, port: Port) -> Output: ...
+    def connect(self, port: Port | None = None) -> Output: ...
     def create_virtual(self, name: str) -> Output: ...
     def __enter__(self) -> Output: ...
     def __exit__(

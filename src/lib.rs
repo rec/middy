@@ -211,9 +211,12 @@ fn populate_midi(module: &Bound<'_, PyModule>) -> PyResult<()> {
         class.setattr("__module__", "middy.midi")?;
         module.add(name, class)?;
     }
-    let error = PyModule::import(py, "middy._errors")?.getattr("CompoundSendError")?;
-    error.setattr("__module__", "middy.midi")?;
-    module.add("CompoundSendError", error)?;
+    let errors = PyModule::import(py, "middy._errors")?;
+    for name in ["CompoundSendError", "BroadcastSendError"] {
+        let error = errors.getattr(name)?;
+        error.setattr("__module__", "middy.midi")?;
+        module.add(name, error)?;
+    }
     Ok(())
 }
 

@@ -816,6 +816,142 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
     assert source.closed
 
 
+@pytest.fixture
+def output_topology(
+    workers: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Path, Path]:
+    topology = tmp_path / "output-ports"
+    log = tmp_path / "output-log"
+    topology.write_text("Synth A\nSynth B\nOther\n")
+    log.write_text("")
+    monkeypatch.setenv("MIDDY_TEST_MODE", "broadcast")
+    monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
+    monkeypatch.setenv("MIDDY_TEST_OUTPUT_LOG", str(log))
+    return topology, log
+
+
+def output_packets(log: Path) -> list[tuple[str, str]]:
+    return [
+        (p[0], p[2])
+        for s in log.read_text().splitlines()
+        if (p := s.split("\t"))[2] != "close"
+    ]
+
+
+@pytest.mark.parametrize("port", ["Synth *", ["Synth *", "* A"]])
+def test_output_broadcast_follows_new_matches_and_cleans_only_what_each_port_received(
+    output_topology: tuple[Path, Path], port: str | list[str]
+) -> None:
+    topology, log = output_topology
+    with midi.Output(port=port, run_in_subprocess=True) as output:
+        assert output.send(messages.NoteOn(60)).sent_events == 1
+        topology.write_text("Synth A\nSynth B\nSynth C\nOther\n")
+        output.send(messages.NoteOn(61))
+        topology.write_text("Synth A\nSynth C\nOther\n")
+        output.send(messages.NoteOn(62))
+    packets = output_packets(log)
+    assert [v for n, v in packets if n == "Synth A"] == [
+        "b:903c5a",
+        "b:903d5a",
+        "b:903e5a",
+        "b:803c00",
+        "b:803d00",
+        "b:803e00",
+    ]
+    assert [v for n, v in packets if n == "Synth B"] == [
+        "b:903c5a",
+        "b:903d5a",
+        "b:803c00",
+        "b:803d00",
+    ]
+    assert [v for n, v in packets if n == "Synth C"] == [
+        "b:903d5a",
+        "b:903e5a",
+        "b:803d00",
+        "b:803e00",
+    ]
+    assert all(n != "Other" for n, _ in packets)
+
+
+def test_default_output_still_selects_the_first_device(
+    output_topology: tuple[Path, Path],
+) -> None:
+    _, log = output_topology
+    with midi.Output(run_in_subprocess=True) as output:
+        output.send(messages.TimingClock())
+    assert output_packets(log) == [("Synth A", "b:f8")]
+
+
+def test_output_can_open_before_any_selected_device_is_connected(
+    output_topology: tuple[Path, Path],
+) -> None:
+    topology, log = output_topology
+    with midi.Output(port=("Future *",), run_in_subprocess=True) as output:
+        topology.write_text("Synth A\nFuture Synth\n")
+        output.send(messages.TimingClock())
+    assert output_packets(log) == [("Future Synth", "b:f8")]
+
+
+def test_selected_ump_outputs_receive_commands_without_midi1_cleanup(
+    output_topology: tuple[Path, Path],
+) -> None:
+    _, log = output_topology
+    with midi.Output(
+        port="Synth *", encoding=midi.Encoding.Ump, channel=3, run_in_subprocess=True
+    ) as output:
+        output.send(messages.NoteOn(60, 65535, version=2))
+    assert output_packets(log) == [
+        ("Synth A", "u:40923c00ffff0000"),
+        ("Synth B", "u:40923c00ffff0000"),
+    ]
+
+
+@pytest.mark.parametrize("compound", [False, True])
+def test_broadcast_failure_preserves_device_and_command_progress_and_cleans_other_ports(
+    output_topology: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch, compound: bool
+) -> None:
+    topology, log = output_topology
+    topology.write_text("Good\nFail\nLater\n")
+    monkeypatch.setenv("MIDDY_TEST_FAIL_AFTER", "1" if compound else "0")
+    output = midi.Output(port="*", run_in_subprocess=True)
+    with pytest.raises(midi.BroadcastSendError) as caught:
+        output.send(
+            messages.ControlChange(1, 10000, resolution=14)
+            if compound
+            else messages.NoteOn(60)
+        )
+    error = caught.value
+    assert [p.name for p in error.completed_ports] == ["Good"]
+    assert error.failed_port.name == "Fail" and error.total_ports == 3
+    assert error.completed_events == 0
+    assert isinstance(output.worker_failure, midi.BroadcastSendError)
+    if compound:
+        assert isinstance(error.__cause__, midi.CompoundSendError)
+        assert error.__cause__.completed_messages == 1
+    with pytest.raises((midi.MidiError, midi.StateError, midi.WorkerError)):
+        output.close()
+    packets = output_packets(log)
+    assert ("Good", "b:b00100" if compound else "b:803c00") in packets
+    assert all(n != "Later" for n, _ in packets)
+    assert output.closed
+    assert isinstance(output.worker_failure, midi.BroadcastSendError)
+
+
+def test_output_selection_distinguishes_duplicates_and_rejects_sending_to_no_ports(
+    output_topology: tuple[Path, Path],
+) -> None:
+    topology, log = output_topology
+    topology.write_text("Synth\nSynth\nOther\n")
+    with midi.Output(port=["Synth", "Synth*"], run_in_subprocess=True) as output:
+        output.send(messages.TimingClock())
+    assert output_packets(log) == [("Synth", "b:f8"), ("Synth", "b:f8")]
+    empty = midi.Output(port=[], run_in_subprocess=True)
+    with pytest.raises(ValueError, match="no matching"):
+        empty.send(messages.TimingClock())
+    with pytest.raises(midi.StateError):
+        empty.close()
+
+
 @pytest.mark.parametrize("raw", [False, True])
 @pytest.mark.parametrize("callback", [False, True])
 def test_port_collection_follows_only_matching_devices_and_opens_overlaps_once(

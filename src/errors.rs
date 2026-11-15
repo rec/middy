@@ -84,6 +84,58 @@ pub fn transport_error(error: middy::transport::Error, operation: &str) -> pyo3:
         },
     }
 }
+
+pub(crate) fn midi_error(error: &middy::midi::Error) -> PyErr {
+    use middy::midi::Error;
+    match error {
+        Error::Init(e) => transport_error(e.clone(), "init"),
+        Error::Connect(e) => transport_error(e.clone(), "open"),
+        Error::Send(e) => transport_error(e.clone(), "send"),
+        Error::Transport(e) => transport_error(e.clone(), "close"),
+        Error::Io(e) => pyo3::exceptions::PyOSError::new_err(e.to_string()),
+        Error::Value(e) => pyo3::exceptions::PyValueError::new_err(e.to_string()),
+        Error::Closed | Error::Cancelled => StateError::new_err(error.to_string()),
+        Error::Shared(e) => midi_error(e),
+        Error::BroadcastSend(failure) => Python::attach(|py| {
+            let middy::midi::BroadcastSendError {
+                completed_ports,
+                failed_port,
+                total_ports,
+                cause,
+            } = failure.as_ref();
+            let result = (|| {
+                let completed = completed_ports
+                    .iter()
+                    .map(|p| {
+                        Py::new(
+                            py,
+                            crate::ports::PortInfo {
+                                value: std::sync::Arc::new(p.clone()),
+                            },
+                        )
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                let failed = Py::new(
+                    py,
+                    crate::ports::PortInfo {
+                        value: std::sync::Arc::new(failed_port.clone()),
+                    },
+                )?;
+                PyModule::import(py, "middy.midi")?
+                    .getattr("BroadcastSendError")?
+                    .call1((error.to_string(), completed, failed, *total_ports))
+                    .map(PyErr::from_value)
+            })();
+            match result {
+                Ok(error) => {
+                    error.set_cause(py, Some(midi_error(cause)));
+                    error
+                }
+                Err(error) => error,
+            }
+        }),
+    }
+}
 create_exception!(
     middy.midi,
     PortInfoError,

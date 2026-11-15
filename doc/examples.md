@@ -58,6 +58,18 @@ hardware ID. Each port has its own stream, clock and decoder. `.middy` recording
 retain these descriptions. Constructed messages and files without port metadata
 have `port=None`.
 
+`Output()` selects the first output. Supplying a string or collection sends to
+all matches, checking for new devices before each send. New devices receive
+subsequent messages without replay. Overlapping patterns open each port once;
+sending with no matching ports raises an error.
+
+```python
+import middy as md
+
+with md.Output(port=['Synth *', 'Pad[12]']) as output:
+    output.send(md.Note('500 ms', 60))
+```
+
 ## 4. Transpose a keyboard up an octave
 
 ```python

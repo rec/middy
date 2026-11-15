@@ -67,8 +67,9 @@ pub use messages::{
 };
 pub use metrics::{Distribution, Histogram};
 pub use midi::{
-    Backend, Encoding, Error, Input, Output, OutputSource, OutputValue, PlaybackOptions, Port,
-    PortPatterns, Recording, RecordingOptions, SubprocessOptions, TimestampMode,
+    Backend, BroadcastSendError, Encoding, Error, Input, Output, OutputSource, OutputValue,
+    PlaybackOptions, Port, PortPatterns, Recording, RecordingOptions, SubprocessOptions,
+    TimestampMode,
 };
 pub use mpe::ZoneConfiguration;
 pub use routing::{Route, Router};

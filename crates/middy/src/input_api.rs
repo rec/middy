@@ -24,7 +24,8 @@ use std::{
 type Callback<T> = Box<dyn FnMut(midi::Result<Item<T>>) + Send>;
 type Receive<T> = fn(&mut Core, Option<Instant>) -> Option<io::Result<Item<T>>>;
 
-/// Port selectors accepted by Input::with_port: one string or an iterable of strings.
+/// Port selectors accepted by Input::with_port and Output::with_port:
+/// one string or an iterable of strings.
 pub trait PortPatterns<Kind> {
     #[doc(hidden)]
     fn into_patterns(self) -> Vec<String>;

@@ -37,7 +37,11 @@ from .events import Clock
 class _Client(ResourceModel, frozen=True):
     encoding: midi.Encoding = Field(default_factory=lambda: midi.Encoding.Bytes)
     backend: midi.Backend | None = None
-    port: str | None = Field(default=None, min_length=1)
+    port: (
+        Annotated[str, Field(min_length=1)]
+        | list[Annotated[str, Field(min_length=1)]]
+        | None
+    ) = None
     run_in_subprocess: bool = False
     subprocess_worker: Literal["python", "rust"] = "python"
     subprocess_executable: str | None = None
@@ -47,6 +51,13 @@ class _Client(ResourceModel, frozen=True):
     _initialization: LockType = PrivateAttr(default_factory=Lock)
     _closed: bool = PrivateAttr(default=False)
     _failure: Exception | None = PrivateAttr(default=None)
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _port_values(cls, value: object) -> object:
+        if value is None or isinstance(value, str):
+            return value
+        return list(value) if isinstance(value, Iterable) else value
 
     @model_validator(mode="before")
     @classmethod
@@ -80,11 +91,6 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
     """Listen to current and future ports, optionally selected by names/patterns."""
 
     raw: bool = False
-    port: (
-        Annotated[str, Field(min_length=1)]
-        | list[Annotated[str, Field(min_length=1)]]
-        | None
-    ) = None
     channel: _Channel | list[_Channel | None] | None = None
     event_limit: int = Field(default=128, gt=0)
     sysex_limit: int = Field(default=1_048_576, gt=0)
@@ -96,13 +102,6 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
     _native_client: _native.Input | None = PrivateAttr(default=None)
     _connection: _InputState[T] | None = PrivateAttr(default=None)
     _channels: frozenset[int | None] | None = PrivateAttr(default=None)
-
-    @field_validator("port", mode="before")
-    @classmethod
-    def _port_values(cls, value: object) -> object:
-        if value is None or isinstance(value, str):
-            return value
-        return list(value) if isinstance(value, Iterable) else value
 
     @field_validator("channel", mode="before")
     @classmethod
@@ -497,20 +496,31 @@ class Output(_Client, frozen=True):
 
     @property
     def worker_failure(self) -> Exception | None:
+        if self._connection is not None:
+            if (failure := self._connection.worker_failure) is not None:
+                return cast(Exception, failure)
         if self._native_client is not None and self.run_in_subprocess:
             return self._native_client.worker_failure
         return self._failure
 
-    def connect(self, port: midi.Port) -> Output:
+    def connect(self, port: midi.Port | None = None) -> Output:
         _native.check_thread()
         if self._closed or self._connection is not None:
             raise midi.StateError("output is closed or already connected")
-        if not isinstance(port, midi.Port):
+        if port is not None and not isinstance(port, midi.Port):
             raise TypeError("port must be a discovery snapshot")
         self._initialize()
         connection = _OutputState._create(self)
         assert self._native_client is not None
-        connection._native = self._native_client.connect(port)
+        if port is None and self.port is not None:
+            connection._native = self._native_client.connect_matching(
+                [self.port] if isinstance(self.port, str) else self.port
+            )
+            connection._state = None
+        else:
+            if port is None:
+                port = _native.select_port(self.ports(), None, "output")
+            connection._native = self._native_client.connect(port)
         connection._closed = False
         self._connection = connection
         return self
@@ -709,7 +719,7 @@ class Output(_Client, frozen=True):
         if self._closed:
             raise midi.StateError("output is closed")
         if self._connection is None:
-            self.connect(_native.select_port(self.ports(), self.port, "output"))
+            self.connect()
         return self
 
     def __exit__(
@@ -831,7 +841,6 @@ class _OutputState:
         "_channel",
         "_beat_period",
         "_failure",
-        "_run_in_subprocess",
         "__weakref__",
     )
 
@@ -842,7 +851,6 @@ class _OutputState:
     def _create(cls, client: Output) -> _OutputState:
         connection = object.__new__(cls)
         connection._failure = None
-        connection._run_in_subprocess = client.run_in_subprocess
         connection._state = _native.OutputState()
         connection._encoding = client.encoding
         connection._channel = client.channel
@@ -856,6 +864,9 @@ class _OutputState:
         prepared = _native.prepare_output(self._encoding, value)
         assert self._native is not None
         if isinstance(prepared, tuple):
+            if self._state is None:
+                self._native.send_command(value)
+                return
             total = prepared[2]
             packets = [
                 codecs.encode(m)
@@ -879,7 +890,7 @@ class _OutputState:
                 self._state.feed(p)
         else:
             self._native.send(prepared)
-        if isinstance(prepared, bytes):
+        if isinstance(prepared, bytes) and self._state is not None:
             self._state.feed(prepared)
 
     @property
@@ -888,13 +899,16 @@ class _OutputState:
 
     @property
     def worker_failure(self) -> BaseException | None:
-        if self._native is not None and self._run_in_subprocess:
+        if self._native is not None:
             return self._native.worker_failure
         return self._failure
 
     def close(self) -> None:
         _native.check_thread()
         if self.closed:
+            self._close_transport()
+            return
+        if self._state is None:
             self._close_transport()
             return
         try:
