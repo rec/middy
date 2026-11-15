@@ -115,37 +115,37 @@ macro_rules! management_class {
 }
 management_class!(Discovery;info;{
     #[new]#[pyo3(signature=(*,header,info,extensions=None))]
-    fn new(header:PyRef<'_,Header>,info:PyRef<'_,DiscoveryInfo>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::Discovery(info.value.clone()),extensions)?}))}
+    fn new(header:PyRef<'_,Header>,info:PyRef<'_,DiscoveryInfo>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::Discovery(info.value.clone()),extensions)?}))}
     #[getter]fn info(&self)->DiscoveryInfo{let model::Body::Discovery(value)=self.value.body()else{unreachable!()};DiscoveryInfo{value:value.clone()}}
 });
 management_class!(DiscoveryReply;info,function_block;{
     #[new]#[pyo3(signature=(*,header,info,function_block=None,extensions=None))]
-    fn new(header:PyRef<'_,Header>,info:PyRef<'_,DiscoveryInfo>,function_block:Option<&Bound<'_,PyAny>>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::DiscoveryReply{info:info.value.clone(),function_block:optional_byte(function_block)?},extensions)?}))}
+    fn new(header:PyRef<'_,Header>,info:PyRef<'_,DiscoveryInfo>,function_block:Option<&Bound<'_,PyAny>>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::DiscoveryReply{info:info.value.clone(),function_block:optional_byte(function_block)?},extensions)?}))}
     #[getter]fn info(&self)->DiscoveryInfo{let model::Body::DiscoveryReply{info,..}=self.value.body()else{unreachable!()};DiscoveryInfo{value:info.clone()}}
     #[getter]fn function_block(&self)->Option<u8>{let model::Body::DiscoveryReply{function_block,..}=self.value.body()else{unreachable!()};*function_block}
 });
 management_class!(EndpointInquiry;;{
     #[new]#[pyo3(signature=(*,header,extensions=None))]
-    fn new(header:PyRef<'_,Header>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::EndpointInquiry,extensions)?}))}
+    fn new(header:PyRef<'_,Header>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::EndpointInquiry,extensions)?}))}
 });
 management_class!(EndpointReply;product_instance_id;{
     #[new]#[pyo3(signature=(*,header,product_instance_id,extensions=None))]
-    fn new(header:PyRef<'_,Header>,product_instance_id:String,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::EndpointReply{product_instance_id},extensions)?}))}
+    fn new(header:PyRef<'_,Header>,product_instance_id:String,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::EndpointReply{product_instance_id},extensions)?}))}
     #[getter]fn product_instance_id(&self)->&str{let model::Body::EndpointReply{product_instance_id}=self.value.body()else{unreachable!()};product_instance_id}
 });
 management_class!(InvalidateMuid;target;{
     #[new]#[pyo3(signature=(*,header,target,extensions=None))]
-    fn new(header:PyRef<'_,Header>,target:&Bound<'_,PyAny>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{let target=uint(target)?.try_into().map_err(|_|PyValueError::new_err("target exceeds u32"))?;Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::InvalidateMuid{target},extensions)?}))}
+    fn new(header:PyRef<'_,Header>,target:&Bound<'_,PyAny>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{let target=uint(target)?.try_into().map_err(|_|PyValueError::new_err("target exceeds u32"))?;Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::InvalidateMuid{target},extensions)?}))}
     #[getter]fn target(&self)->u32{let model::Body::InvalidateMuid{target}=self.value.body()else{unreachable!()};*target}
 });
 management_class!(Ack;notice;{
     #[new]#[pyo3(signature=(*,header,notice,extensions=None))]
-    fn new(header:PyRef<'_,Header>,notice:PyRef<'_,Notice>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::Ack(notice.value.clone()),extensions)?}))}
+    fn new(header:PyRef<'_,Header>,notice:PyRef<'_,Notice>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::Ack(notice.value.clone()),extensions)?}))}
     #[getter]fn notice(&self)->Notice{let model::Body::Ack(value)=self.value.body()else{unreachable!()};Notice{value:value.clone()}}
 });
 management_class!(Nak;notice;{
     #[new]#[pyo3(signature=(*,header,notice=None,extensions=None))]
-    fn new(header:PyRef<'_,Header>,notice:Option<PyRef<'_,Notice>>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:build(&header,model::Body::Nak(notice.map(|v|v.value.clone())),extensions)?}))}
+    fn new(header:PyRef<'_,Header>,notice:Option<PyRef<'_,Notice>>,extensions:Option<&Bound<'_,PyAny>>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:build(&header,model::Body::Nak(notice.map(|v|v.value.clone())),extensions)?}))}
     #[getter]fn notice(&self)->Option<Notice>{let model::Body::Nak(value)=self.value.body()else{unreachable!()};value.clone().map(|value|Notice{value})}
 });
 #[pyclass(frozen, skip_from_py_object, module = "middy.ci")]
@@ -486,9 +486,20 @@ pub(crate) fn to_python(py: Python<'_>, value: model::Management) -> PyResult<Py
     }
 }
 
-pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-    crate::messages::rebuild_message!(object, base;
-        Discovery, DiscoveryReply, EndpointInquiry, EndpointReply, InvalidateMuid, Ack, Nak);
+pub(crate) fn construct(
+    object: &Bound<'_, PyAny>,
+    fields: &Bound<'_, PyDict>,
+    metadata: &Option<std::sync::Arc<crate::messages::Metadata>>,
+) -> PyResult<Option<Py<PyAny>>> {
+    use crate::messages::{field, optional_field};
+    crate::messages::construct_message!(object, metadata;
+        Discovery => Discovery::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, field(fields,"info")?.extract::<PyRef<'_, DiscoveryInfo>>().map_err(|e|crate::messages::argument_error(fields.py(),"info",e.into()))?, optional_field(fields,"extensions")?.as_ref()),
+        DiscoveryReply => DiscoveryReply::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, field(fields,"info")?.extract::<PyRef<'_, DiscoveryInfo>>().map_err(|e|crate::messages::argument_error(fields.py(),"info",e.into()))?, optional_field(fields,"function_block")?.as_ref(), optional_field(fields,"extensions")?.as_ref()),
+        EndpointInquiry => EndpointInquiry::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, optional_field(fields,"extensions")?.as_ref()),
+        EndpointReply => EndpointReply::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, crate::messages::converted_field(fields,"product_instance_id",|v|v.extract::<String>())?, optional_field(fields,"extensions")?.as_ref()),
+        InvalidateMuid => InvalidateMuid::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, &field(fields,"target")?, optional_field(fields,"extensions")?.as_ref()),
+        Ack => Ack::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, field(fields,"notice")?.extract::<PyRef<'_, Notice>>().map_err(|e|crate::messages::argument_error(fields.py(),"notice",e.into()))?, optional_field(fields,"extensions")?.as_ref()),
+        Nak => Nak::new(field(fields,"header")?.extract::<PyRef<'_, Header>>().map_err(|e|crate::messages::argument_error(fields.py(),"header",e.into()))?, field(fields,"notice")?.extract::<Option<PyRef<'_, Notice>>>().map_err(|e|crate::messages::argument_error(fields.py(),"notice",e.into()))?, optional_field(fields,"extensions")?.as_ref()));
     Ok(None)
 }
 fn updates(py: Python<'_>, values: Vec<session::Update>) -> PyResult<Vec<Py<PyAny>>> {

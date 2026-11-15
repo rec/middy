@@ -1,14 +1,63 @@
 """Exercise the public values using the shared representation contract."""
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from struct import calcsize
 from subprocess import run
 
+import pytest
 from native import middy_messages
 
 import middy
 from middy import events, messages
+
+
+@pytest.mark.parametrize(
+    ("constructor", "values", "changes"),
+    [
+        (middy.NoteOn, {"note": 60}, {"note": 128}),
+        (middy.ProgramChange, {"program": 1}, {"program": False}),
+        (middy.SysEx, {"data": b"\x01"}, {"data": b"\x80"}),
+        (middy.GmMode, {"mode": "gm1", "device_id": 127}, {"mode": 1}),
+        (
+            messages.ParameterController,
+            {"group": 1, "channel": 1, "bank": 0, "index": 0, "value": 0},
+            {"family": 1},
+        ),
+        (
+            middy.ci.EndpointInquiry,
+            {"header": middy.ci.Header(source_muid=1, destination_muid=2)},
+            {"header": None},
+        ),
+        (middy.tuning.BulkDumpRequest, {"device_id": 0, "program": 0}, {"bank": 128}),
+        (
+            middy.ump.SysEx8Packet,
+            {"group": 1, "format": 0, "stream_id": 0, "data": b""},
+            {"aborted": 1},
+        ),
+        (
+            middy.gm.KeyBasedControl,
+            {"device_id": 127, "channel": 1, "note": 60, "entries": [(7, 10)]},
+            {"max_entries": 0},
+        ),
+    ],
+)
+def test_replace_uses_constructor_validation(
+    constructor: Callable[..., messages.Message],
+    values: dict[str, object],
+    changes: dict[str, object],
+) -> None:
+    original = constructor(**values)
+    with pytest.raises((TypeError, ValueError)) as constructed:
+        constructor(**(values | changes))
+    with pytest.raises(type(constructed.value)) as replaced:
+        original.replace(**changes)  # ty: ignore[invalid-argument-type]
+    assert str(replaced.value) == str(constructed.value)
+    assert getattr(replaced.value, "__notes__", []) == getattr(
+        constructed.value, "__notes__", []
+    )
+    assert original == constructor(**values)
 
 
 def test_optional_provenance_does_not_inflate_message_objects() -> None:

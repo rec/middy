@@ -1,5 +1,5 @@
 //! Pure profile bindings; the public loaders select their own namespace.
-use crate::messages::{integer, Message};
+use crate::messages::{field, integer, optional_field, Message};
 use crate::tuning::{render, replacement};
 use middy::messages::PrimitiveMessage;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -19,8 +19,8 @@ macro_rules! classes {
         impl $name {
             #[new]
             #[pyo3(signature=(*,$($field),*))]
-            fn new($($field:&Bound<'_,PyAny>),*)->PyResult<PyClassInitializer<Self>> {
-                Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
+            fn new($($field:&Bound<'_,PyAny>),*)->PyResult<crate::messages::MessageInitializer<Self>> {
+                Ok(crate::messages::MessageInitializer(Self {
                     value:model::$name::new($(self::$read(&crate::units::field($field,stringify!($field))?)?),*).map_err(value_error)?,
                 }))
             }
@@ -42,7 +42,12 @@ macro_rules! classes {
                 let fields=PyDict::new(py);$(fields.set_item(stringify!($field),py.get_type::<$annotation>())?;)*Ok(fields)
             }
         }
-    )*};
+    )*
+        pub(super) fn construct(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<crate::messages::Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::construct_message!(object, metadata; $($name => $name::new($(&field(fields,stringify!($field))?),*)),*);
+            Ok(None)
+        }
+    };
 }
 macro_rules! entry_annotation {
     (OptionalInt,$py:ident) => {
@@ -72,6 +77,15 @@ macro_rules! entries {
 mod gm {
     use super::*;
     use middy::gm as model;
+    pub(super) fn construct(
+        object: &Bound<'_, PyAny>,
+        fields: &Bound<'_, PyDict>,
+        metadata: &Option<std::sync::Arc<crate::messages::Metadata>>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        crate::messages::construct_message!(object, metadata;
+            GmMode => GmMode::new(&crate::messages::converted_field(fields,"mode",|v|v.extract::<String>())?, &field(fields,"device_id")?));
+        Ok(None)
+    }
     #[pyclass(frozen, extends=Message, module="middy.gm")]
     pub(super) struct GmMode {
         pub(super) value: model::GmMode,
@@ -80,7 +94,10 @@ mod gm {
     impl GmMode {
         #[new]
         #[pyo3(signature=(mode,*,device_id))]
-        fn new(mode: &str, device_id: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        fn new(
+            mode: &str,
+            device_id: &Bound<'_, PyAny>,
+        ) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let mode = match mode {
                 "gm1" => model::Mode::Gm1,
                 "gm2" => model::Mode::Gm2,
@@ -92,7 +109,7 @@ mod gm {
                 }
             };
             let value = model::GmMode::new(mode, int(device_id)?).map_err(value_error)?;
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
         #[getter]
         fn mode(&self) -> &'static str {
@@ -236,6 +253,15 @@ mod gm {
 mod mpe {
     use super::*;
     use middy::mpe as model;
+    pub(super) fn construct(
+        object: &Bound<'_, PyAny>,
+        fields: &Bound<'_, PyDict>,
+        metadata: &Option<std::sync::Arc<crate::messages::Metadata>>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        crate::messages::construct_message!(object, metadata;
+            ZoneConfiguration => ZoneConfiguration::new(&field(fields,"manager_channel")?, &field(fields,"members")?, optional_field(fields,"group")?.as_ref()));
+        Ok(None)
+    }
     #[pyclass(frozen, extends=Message, module="middy.mpe")]
     pub(super) struct ZoneConfiguration {
         pub(super) value: model::ZoneConfiguration,
@@ -248,13 +274,13 @@ mod mpe {
             manager_channel: &Bound<'_, PyAny>,
             members: &Bound<'_, PyAny>,
             group: Option<&Bound<'_, PyAny>>,
-        ) -> PyResult<PyClassInitializer<Self>> {
+        ) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let mut value = model::ZoneConfiguration::new(int(manager_channel)?, int(members)?)
                 .map_err(value_error)?;
             if let Some(g) = group {
                 value = value.with_group(int(g)?).map_err(value_error)?;
             }
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
         #[getter]
         fn manager_channel(&self) -> u8 {
@@ -430,10 +456,6 @@ pub fn register_timecode(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 macro_rules! primitives {
     ($($module:ident :: $name:ident),*)=>{
-        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            crate::messages::rebuild_message!(object, base; $($module::$name,)* mpe::ZoneConfiguration);
-            engines::rebuild(object, base)
-        }
         pub fn encode_message(message:&Bound<'_,PyAny>)->Option<Vec<u8>> {$(if let Ok(value)=message.extract::<PyRef<'_,$module::$name>>() {return Some(value.value.encode().expect("validated system message"));})*engines::encode_message(message)}
     };
 }
@@ -446,6 +468,24 @@ primitives!(
     universal::MasterCoarseTuning,
     timecode::FullFrame
 );
+pub(crate) fn construct(
+    object: &Bound<'_, PyAny>,
+    fields: &Bound<'_, PyDict>,
+    metadata: &Option<std::sync::Arc<crate::messages::Metadata>>,
+) -> PyResult<Option<Py<PyAny>>> {
+    for construct in [
+        gm::construct,
+        mpe::construct,
+        universal::construct,
+        timecode::construct,
+        engines::construct,
+    ] {
+        if let Some(value) = construct(object, fields, metadata)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
 pub fn extract_command(
     command: &Bound<'_, PyAny>,
 ) -> PyResult<Option<middy::messages::AnyCommand>> {

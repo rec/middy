@@ -1,5 +1,5 @@
 //! Python views of the native MIDI 2-only musical values.
-use crate::messages::{integer, Message};
+use crate::messages::{field, integer, Message};
 use middy::messages as model;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyInt, PyTuple};
@@ -14,8 +14,8 @@ macro_rules! values {
             #[new]
             #[pyo3(signature=(*,$($field),*))]
             #[allow(clippy::too_many_arguments)]
-            fn new($($field: &Bound<'_, PyAny>),*) -> PyResult<PyClassInitializer<Self>> {
-                Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
+            fn new($($field: &Bound<'_, PyAny>),*) -> PyResult<crate::messages::MessageInitializer<Self>> {
+                Ok(crate::messages::MessageInitializer(Self {
                     value: model::$name::new($(integer($field, stringify!($field))?),*).map_err(crate::ump::error)?,
                 }))
             }
@@ -60,8 +60,8 @@ macro_rules! values {
                 _ => unreachable!("MIDI 2-only semantic type"),
             }
         }
-        fn rebuild_plain(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            crate::messages::rebuild_message!(object, base; $($name),*);
+        fn construct_plain(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<crate::messages::Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::construct_message!(object, metadata; $($name => $name::new($(&field(fields,stringify!($field))?),*)),*);
             Ok(None)
         }
         fn register_plain(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -94,9 +94,9 @@ macro_rules! family_values {
         #[pymethods]
         impl $name {
             #[new] #[pyo3(signature=(*,$($field,)*family="registered"))]
-            fn new($($field:&Bound<'_,PyAny>,)* family:&str)->PyResult<PyClassInitializer<Self>> {
+            fn new($($field:&Bound<'_,PyAny>,)* family:&str)->PyResult<crate::messages::MessageInitializer<Self>> {
                 let value=model::$name::new_with_family($(integer($field,stringify!($field))?,)*self::family(family)?).map_err(crate::ump::error)?;
-                Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value}))
+                Ok(crate::messages::MessageInitializer(Self{value}))
             }
             $(#[getter] fn $field(&self)->$ty { self.value.$field() })*
             #[getter] fn version(&self)->u8 { 2 }
@@ -123,9 +123,9 @@ macro_rules! family_values {
         pub(crate) fn to_python(py:Python<'_>,value:model::AnyMessage,base:Message)->PyResult<Py<PyAny>> {
             match value {$(model::AnyMessage::$name(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass($name{value}))?.into_any()),)*value=>plain_to_python(py,value,base)}
         }
-        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            crate::messages::rebuild_message!(object, base; $($name),*);
-            rebuild_plain(object, base)
+        pub(crate) fn construct(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<crate::messages::Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::construct_message!(object, metadata; $($name => $name::new($(&field(fields,stringify!($field))?,)* &crate::messages::converted_field(fields,"family",|v|v.extract::<String>())?)),*);
+            construct_plain(object, fields, metadata)
         }
         pub(crate) fn register(module:&Bound<'_,PyModule>)->PyResult<()> {register_plain(module)?; $(module.add_class::<$name>()?;)*Ok(())}
     };

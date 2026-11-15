@@ -1,5 +1,5 @@
 //! One pure UMP namespace backed by Rust-owned values. No native MIDI runtime.
-use crate::messages::{self, integer, Message};
+use crate::messages::{self, field, integer, Message};
 use crate::tuning::{render, replacement};
 use middy::ump as model;
 use pyo3::buffer::PyBuffer;
@@ -50,13 +50,13 @@ macro_rules! scalar {
     (Noop [$first:expr,$second:expr] {}; $($name:ident [$a:expr,$b:expr] {$($field:ident:$ty:ty = $lo:literal ..= $hi:literal => [$word:literal,$shift:literal,$mask:literal,$bias:literal]),*};)*)=>{
         #[pyclass(frozen,extends=Message,module="middy.ump")]
         struct Noop {value:model::Noop}
-        value_methods!(Noop;;{#[new]fn new()->PyClassInitializer<Self>{PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::Noop::new().expect("constant Noop")})}});
+        value_methods!(Noop;;{#[new]fn new()->crate::messages::MessageInitializer<Self>{crate::messages::MessageInitializer(Self{value:model::Noop::new().expect("constant Noop")})}});
         $(#[pyclass(frozen,extends=Message,module="middy.ump")]
         struct $name{value:model::$name}
         value_methods!($name;$($field),*;{
             #[new]#[pyo3(signature=(*,$($field),*))]
             #[allow(clippy::too_many_arguments)]
-            fn new($($field:&Bound<'_,PyAny>),*)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::$name::new($(integer($field,stringify!($field))?),*).map_err(error)?}))}
+            fn new($($field:&Bound<'_,PyAny>),*)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::$name::new($(integer($field,stringify!($field))?),*).map_err(error)?}))}
             $(#[getter]fn $field(&self)->$ty{self.value.$field()})*
             #[classattr]fn __annotations__(py:Python<'_>)->PyResult<Bound<'_,PyDict>>{let d=PyDict::new(py);$(d.set_item(stringify!($field),py.get_type::<PyInt>())?;)*Ok(d)}
         });)*
@@ -76,9 +76,16 @@ macro_rules! scalar {
             model::PacketValue::Stream(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(StreamMessage{value}))?.into_any()),
             model::PacketValue::Opaque(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(OpaquePacket{value}))?.into_any()),
         }}
-        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            crate::messages::rebuild_message!(object, base; Noop, $($name,)*
-                SysEx7Packet, SysEx8Packet, MixedDataSet, FlexData, StreamMessage, OpaquePacket);
+        pub(crate) fn construct(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<crate::messages::Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::construct_message!(object, metadata;
+                Noop => Ok::<_, PyErr>(Noop::new()),
+                $($name => $name::new($(&field(fields,stringify!($field))?),*),)*
+                SysEx7Packet => SysEx7Packet::new(object.py(), &field(fields,"group")?, &field(fields,"format")?, &field(fields,"data")?),
+                SysEx8Packet => SysEx8Packet::new(object.py(), &field(fields,"group")?, &field(fields,"format")?, &field(fields,"stream_id")?, &field(fields,"data")?, crate::messages::converted_field(fields,"aborted",boolean)?),
+                MixedDataSet => MixedDataSet::new(object.py(), &field(fields,"group")?, &field(fields,"header")?, &field(fields,"mds_id")?, &field(fields,"data")?),
+                FlexData => FlexData::new(&field(fields,"group")?, &field(fields,"format")?, &field(fields,"channel")?, &field(fields,"status_bank")?, &field(fields,"status")?, &field(fields,"data")?),
+                StreamMessage => StreamMessage::new(object.py(), &field(fields,"format")?, &field(fields,"status")?, &field(fields,"data")?),
+                OpaquePacket => OpaquePacket::new(&field(fields,"words")?));
             Ok(None)
         }
         pub(crate) fn register(module:&Bound<'_,PyModule>)->PyResult<()>{module.add_class::<Noop>()?;$(module.add_class::<$name>()?;)*register_packets(module)}
@@ -91,7 +98,7 @@ struct SysEx7Packet {
 }
 value_methods!(SysEx7Packet;group,format,data;{
     #[new]#[pyo3(signature=(*,group,format,data))]
-    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::SysEx7Packet::new(int(group)?,int(format)?,buffer(py,data,6)?).map_err(error)?}))}
+    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::SysEx7Packet::new(int(group)?,int(format)?,buffer(py,data,6)?).map_err(error)?}))}
     #[getter]fn group(&self)->u8{self.value.group()}#[getter]fn format(&self)->u8{self.value.format()}
     #[getter]fn data<'py>(&self,py:Python<'py>)->Bound<'py,PyBytes>{PyBytes::new(py,self.value.data())}
 });
@@ -101,7 +108,7 @@ struct SysEx8Packet {
 }
 value_methods!(SysEx8Packet;group,format,stream_id,data,aborted;{
     #[new]#[pyo3(signature=(*,group,format,stream_id,data,aborted=false))]
-    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,stream_id:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>,#[pyo3(from_py_with=boolean)] aborted:bool)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::SysEx8Packet::new(int(group)?,int(format)?,int(stream_id)?,buffer(py,data,13)?,aborted).map_err(error)?}))}
+    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,stream_id:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>,#[pyo3(from_py_with=boolean)] aborted:bool)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::SysEx8Packet::new(int(group)?,int(format)?,int(stream_id)?,buffer(py,data,13)?,aborted).map_err(error)?}))}
     #[getter]fn group(&self)->u8{self.value.group()}#[getter]fn format(&self)->u8{self.value.format()}#[getter]fn stream_id(&self)->u8{self.value.stream_id()}#[getter]fn aborted(&self)->bool{self.value.aborted()}
     #[getter]fn data<'py>(&self,py:Python<'py>)->Bound<'py,PyBytes>{PyBytes::new(py,self.value.data())}
 });
@@ -111,7 +118,7 @@ struct MixedDataSet {
 }
 value_methods!(MixedDataSet;group,header,mds_id,data;{
     #[new]#[pyo3(signature=(*,group,header,mds_id,data))]
-    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,header:&Bound<'_,PyAny>,mds_id:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::MixedDataSet::new(int(group)?,boolean(header)?,int(mds_id)?,buffer(py,data,14)?).map_err(error)?}))}
+    fn new(py:Python<'_>,group:&Bound<'_,PyAny>,header:&Bound<'_,PyAny>,mds_id:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::MixedDataSet::new(int(group)?,boolean(header)?,int(mds_id)?,buffer(py,data,14)?).map_err(error)?}))}
     #[getter]fn group(&self)->u8{self.value.group()}#[getter]fn header(&self)->bool{self.value.header()}#[getter]fn mds_id(&self)->u8{self.value.mds_id()}
     #[getter]fn data<'py>(&self,py:Python<'py>)->Bound<'py,PyBytes>{PyBytes::new(py,self.value.data())}
 });
@@ -121,7 +128,7 @@ struct FlexData {
 }
 value_methods!(FlexData;group,format,channel,status_bank,status,data;{
     #[new]#[pyo3(signature=(*,group,format,channel,status_bank,status,data))]
-    fn new(group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,channel:&Bound<'_,PyAny>,status_bank:&Bound<'_,PyAny>,status:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::FlexData::new(int(group)?,int(format)?,optional_int(channel)?,int(status_bank)?,int(status)?,words(data,3)?).map_err(error)?}))}
+    fn new(group:&Bound<'_,PyAny>,format:&Bound<'_,PyAny>,channel:&Bound<'_,PyAny>,status_bank:&Bound<'_,PyAny>,status:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::FlexData::new(int(group)?,int(format)?,optional_int(channel)?,int(status_bank)?,int(status)?,words(data,3)?).map_err(error)?}))}
     #[getter]fn group(&self)->u8{self.value.group()}#[getter]fn format(&self)->u8{self.value.format()}#[getter]fn channel(&self)->Option<u8>{self.value.channel()}#[getter]fn status_bank(&self)->u8{self.value.status_bank()}#[getter]fn status(&self)->u8{self.value.status()}
     #[getter]fn data<'py>(&self,py:Python<'py>)->PyResult<Bound<'py,PyTuple>>{tuple(py,self.value.data())}
 });
@@ -131,7 +138,7 @@ struct StreamMessage {
 }
 value_methods!(StreamMessage;format,status,data;{
     #[new]#[pyo3(signature=(*,format,status,data))]
-    fn new(py:Python<'_>,format:&Bound<'_,PyAny>,status:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::StreamMessage::new(int(format)?,int(status)?,buffer(py,data,14)?).map_err(error)?}))}
+    fn new(py:Python<'_>,format:&Bound<'_,PyAny>,status:&Bound<'_,PyAny>,data:&Bound<'_,PyAny>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::StreamMessage::new(int(format)?,int(status)?,buffer(py,data,14)?).map_err(error)?}))}
     #[getter]fn format(&self)->u8{self.value.format()}#[getter]fn status(&self)->u16{self.value.status()}
     #[getter]fn data<'py>(&self,py:Python<'py>)->Bound<'py,PyBytes>{PyBytes::new(py,self.value.data())}
 });
@@ -141,7 +148,7 @@ struct OpaquePacket {
 }
 value_methods!(OpaquePacket;words;{
     #[new]#[pyo3(signature=(*,words))]
-    fn new(words:&Bound<'_,PyAny>)->PyResult<PyClassInitializer<Self>>{Ok(PyClassInitializer::from(Message::default()).add_subclass(Self{value:model::OpaquePacket::new(self::words(words,4)?).map_err(error)?}))}
+    fn new(words:&Bound<'_,PyAny>)->PyResult<crate::messages::MessageInitializer<Self>>{Ok(crate::messages::MessageInitializer(Self{value:model::OpaquePacket::new(self::words(words,4)?).map_err(error)?}))}
     #[getter]fn words<'py>(&self,py:Python<'py>)->PyResult<Bound<'py,PyTuple>>{tuple(py,self.value.words())}
 });
 fn extract_packet(value: &Bound<'_, PyAny>) -> PyResult<model::PacketValue> {

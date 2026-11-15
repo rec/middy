@@ -44,18 +44,63 @@ impl Message {
     }
 }
 
-macro_rules! rebuild_message {
-    ($object:expr, $base:expr; $($class:path $( { $($field:ident),* } )?),+ $(,)?) => {$({
-        use $class as RebuildClass;
-        if let Ok(value) = $object.extract::<PyRef<'_, RebuildClass>>() {
+/// A validated value that can be allocated with default or replacement metadata.
+pub(crate) struct MessageInitializer<T>(pub(crate) T);
+
+impl<T: pyo3::PyClass<BaseType = Message>> From<MessageInitializer<T>> for PyClassInitializer<T> {
+    fn from(value: MessageInitializer<T>) -> Self {
+        PyClassInitializer::from(Message::default()).add_subclass(value.0)
+    }
+}
+
+impl<'py, T: pyo3::PyClass<BaseType = Message>> IntoPyObject<'py> for MessageInitializer<T> {
+    type Target = T;
+    type Output = Bound<'py, T>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> PyResult<Self::Output> {
+        Py::new(py, self).map(|v| v.into_bound(py))
+    }
+}
+
+macro_rules! construct_message {
+    ($object:expr, $metadata:expr; $($class:path => $initializer:expr),+ $(,)?) => {$({
+        if $object.is_instance_of::<$class>() {
+            let value = $initializer?.0;
+            let base = $crate::messages::Message::from_metadata($metadata.clone())?;
             return Ok(Some(Py::new($object.py(),
-                PyClassInitializer::from($base.clone()).add_subclass(RebuildClass {
-                    value: value.value.clone(), $($($field: value.$field,)*)?
-                }))?.into_any()));
+                PyClassInitializer::from(base).add_subclass(value))?.into_any()));
         }
     })+};
 }
-pub(crate) use rebuild_message;
+pub(crate) use construct_message;
+
+pub(crate) fn field<'py>(fields: &Bound<'py, PyDict>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+    fields
+        .get_item(name)?
+        .ok_or_else(|| PyTypeError::new_err(format!("missing field: {name}")))
+}
+pub(crate) fn optional_field<'py>(
+    fields: &Bound<'py, PyDict>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(fields.get_item(name)?.filter(|v| !v.is_none()))
+}
+
+pub(crate) fn argument_error(py: Python<'_>, name: &str, error: PyErr) -> PyErr {
+    let _ = error
+        .value(py)
+        .call_method1("add_note", (format!("while processing '{name}'"),));
+    error
+}
+
+pub(crate) fn converted_field<T>(
+    fields: &Bound<'_, PyDict>,
+    name: &str,
+    convert: impl FnOnce(&Bound<'_, PyAny>) -> PyResult<T>,
+) -> PyResult<T> {
+    convert(&field(fields, name)?).map_err(|error| argument_error(fields.py(), name, error))
+}
 
 #[pymethods]
 impl Message {
@@ -108,14 +153,14 @@ impl SysEx {
     fn new(
         data: &Bound<'_, PyAny>,
         group: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<MessageInitializer<Self>> {
         let mut value = payload(data)?;
         if let Some(g) = group {
             value = value
                 .with_group(integer(g, "group")?)
                 .map_err(value_error)?;
         }
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+        Ok(MessageInitializer(Self { value }))
     }
 
     #[getter]
@@ -179,6 +224,13 @@ macro_rules! versioned_message {
         struct $name { value: messages::$name }
         impl $name {
             fn from_value(value: messages::$name) -> Self { Self { value } }
+            fn from_fields(fields: &Bound<'_, PyDict>) -> PyResult<MessageInitializer<Self>> {
+                Self::new($(&field(fields,stringify!($required))?,)*
+                    $(optional_field(fields,stringify!($optional))?.as_ref(),)*
+                    optional_field(fields,"channel")?.as_ref(), converted_field(fields,"version",strict_integer)?,
+                    optional_field(fields,"group")?.as_ref(),
+                    $(optional_field(fields,stringify!($extra))?.as_ref(),)*)
+            }
             fn resolved(&self) -> PyResult<&messages::$name> {
                 if self.value.version() != 1 { return Err(PyValueError::new_err("expected MIDI 1; convert explicitly")); }
                 if self.value.channel().is_none() { return Err(PyValueError::new_err("message channel is unassigned")); }
@@ -190,7 +242,7 @@ macro_rules! versioned_message {
             #[new]
             #[pyo3(signature=$signature)]
             #[allow(clippy::too_many_arguments)]
-            fn new($($required: &Bound<'_, PyAny>,)* $($optional: Option<&Bound<'_, PyAny>>,)* channel: Option<&Bound<'_, PyAny>>, #[pyo3(from_py_with=strict_integer)] version: i64, group: Option<&Bound<'_, PyAny>>, $($extra: Option<&Bound<'_, PyAny>>),*) -> PyResult<PyClassInitializer<Self>> {
+            fn new($($required: &Bound<'_, PyAny>,)* $($optional: Option<&Bound<'_, PyAny>>,)* channel: Option<&Bound<'_, PyAny>>, #[pyo3(from_py_with=strict_integer)] version: i64, group: Option<&Bound<'_, PyAny>>, $($extra: Option<&Bound<'_, PyAny>>),*) -> PyResult<MessageInitializer<Self>> {
                 let mut value = match version {
                     1 => messages::$name::new($(integer($required,stringify!($required))?),*),
                     2 => messages::$name::new_midi2($(integer($required,stringify!($required))?),*),
@@ -200,7 +252,7 @@ macro_rules! versioned_message {
                 if let Some(v) = channel { value = value.with_channel(integer(v,"channel")?).map_err(value_error)?; }
                 if let Some(v) = group { value = value.with_group(integer(v,"group")?).map_err(value_error)?; }
                 $(if let Some(v) = $extra { value = value.$extra_setter(integer(v,stringify!($extra))?).map_err(value_error)?; })*
-                Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+                Ok(MessageInitializer(Self { value }))
             }
             #[getter] fn channel(&self) -> Option<u8> { self.value.channel() }
             #[getter] fn version(&self) -> u8 { self.value.version() }
@@ -277,6 +329,16 @@ impl ControlChange {
     fn from_value(value: messages::ControlChange) -> Self {
         Self { value }
     }
+    fn from_fields(fields: &Bound<'_, PyDict>) -> PyResult<MessageInitializer<Self>> {
+        Self::new(
+            &field(fields, "controller")?,
+            &field(fields, "value")?,
+            optional_field(fields, "channel")?.as_ref(),
+            converted_field(fields, "version", strict_integer)?,
+            optional_field(fields, "group")?.as_ref(),
+            optional_field(fields, "resolution")?.as_ref(),
+        )
+    }
     fn resolved(&self) -> PyResult<&messages::ControlChange> {
         if self.value.version() != 1 {
             return Err(PyValueError::new_err("expected MIDI 1; convert explicitly"));
@@ -303,7 +365,7 @@ impl ControlChange {
         #[pyo3(from_py_with=strict_integer)] version: i64,
         group: Option<&Bound<'_, PyAny>>,
         resolution: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<MessageInitializer<Self>> {
         let controller = integer(controller, "controller")?;
         let number = integer(value, "value")?;
         let resolution = resolution.map(|v| integer(v, "resolution")).transpose()?;
@@ -328,7 +390,7 @@ impl ControlChange {
                 .with_group(integer(v, "group")?)
                 .map_err(value_error)?;
         }
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+        Ok(MessageInitializer(Self { value }))
     }
     #[getter]
     fn controller(&self) -> u8 {
@@ -449,6 +511,16 @@ impl ProgramChange {
     fn from_value(value: messages::ProgramChange) -> Self {
         Self { value }
     }
+    fn from_fields(fields: &Bound<'_, PyDict>) -> PyResult<MessageInitializer<Self>> {
+        Self::new(
+            converted_field(fields, "program", strict_integer)?,
+            optional_field(fields, "channel")?.as_ref(),
+            converted_field(fields, "version", strict_integer)?,
+            optional_field(fields, "group")?.as_ref(),
+            optional_field(fields, "bank_msb")?.as_ref(),
+            optional_field(fields, "bank_lsb")?.as_ref(),
+        )
+    }
     fn resolved(&self) -> PyResult<&messages::ProgramChange> {
         Ok(&self.value)
     }
@@ -464,7 +536,7 @@ impl ProgramChange {
         group: Option<&Bound<'_, PyAny>>,
         bank_msb: Option<&Bound<'_, PyAny>>,
         bank_lsb: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<MessageInitializer<Self>> {
         let mut value = match version {
             1 => messages::ProgramChange::new(program),
             2 => messages::ProgramChange::new_midi2(program),
@@ -494,7 +566,7 @@ impl ProgramChange {
                 .with_group(integer(v, "group")?)
                 .map_err(value_error)?;
         }
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+        Ok(MessageInitializer(Self { value }))
     }
     #[getter]
     fn program(&self) -> u8 {
@@ -613,6 +685,9 @@ macro_rules! message_classes {
             struct $name { value: messages::$name }
             impl $name {
                 fn from_value(value: messages::$name) -> Self { Self { value } }
+                fn from_fields(fields: &Bound<'_, PyDict>) -> PyResult<MessageInitializer<Self>> {
+                    Self::new($(&field(fields,stringify!($field))?,)* optional_field(fields,"group")?.as_ref())
+                }
                 fn resolved(&self) -> PyResult<&messages::$name> { Ok(&self.value) }
             }
 
@@ -620,12 +695,10 @@ macro_rules! message_classes {
             impl $name {
                 #[new]
                 #[pyo3(signature = ($($field,)* *, group=None))]
-                fn new($($field: &Bound<'_, PyAny>,)* group: Option<&Bound<'_, PyAny>>) -> PyResult<PyClassInitializer<Self>> {
+                fn new($($field: &Bound<'_, PyAny>,)* group: Option<&Bound<'_, PyAny>>) -> PyResult<MessageInitializer<Self>> {
                     let mut value = messages::$name::new($(integer($field, stringify!($field))?),*).map_err(value_error)?;
                     if let Some(g) = group { value = value.with_group(integer(g, "group")?).map_err(value_error)?; }
-                    Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
-                        value,
-                    }))
+                    Ok(MessageInitializer(Self { value }))
                 }
                 $(#[getter]
                 fn $field(&self) -> i64 { i64::from(self.value.$field()) })*
@@ -706,20 +779,26 @@ macro_rules! short_messages {
             }
         }
 
-        fn rebuild_primitive(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            rebuild_message!(object, base; SysEx, $($name,)* ParameterSet, ParameterStep);
+        fn construct_primitive(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            construct_message!(object, metadata;
+                SysEx => SysEx::new(&field(fields, "data")?, optional_field(fields, "group")?.as_ref()),
+                $($name => $name::from_fields(fields),)*
+                ParameterSet => ParameterSet::new(converted_field(fields,"parameter",strict_integer)?,converted_field(fields,"value",strict_integer)?,converted_field(fields,"resolution",strict_integer)?, optional_field(fields,"channel")?.as_ref(), &converted_field(fields,"family",|v|v.extract::<String>())?, optional_field(fields,"group")?.as_ref()),
+                ParameterStep => ParameterStep::new(converted_field(fields,"parameter",strict_integer)?,converted_field(fields,"direction",strict_integer)?, optional_field(fields,"channel")?.as_ref(), &converted_field(fields,"family",|v|v.extract::<String>())?, optional_field(fields,"group")?.as_ref())
+            );
             Ok(None)
         }
-        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Py<PyAny>> {
-            for rebuild in [
-                rebuild_primitive,
-                crate::messages_midi2::rebuild, crate::ump::rebuild,
-                crate::tuning::rebuild, crate::profiles::rebuild, crate::ci::rebuild,
+        pub(crate) fn construct(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<Metadata>>) -> PyResult<Py<PyAny>> {
+            for construct in [
+                construct_primitive,
+                crate::messages_midi2::construct, crate::ump::construct,
+                crate::tuning::construct, crate::profiles::construct, crate::ci::construct,
             ] {
-                if let Some(value) = rebuild(object, base)? { return Ok(value); }
+                if let Some(value) = construct(object, fields, metadata)? { return Ok(value); }
             }
             Err(PyTypeError::new_err("unsupported native Message class"))
         }
+
 
 
     };
@@ -887,7 +966,7 @@ impl ParameterSet {
         channel: Option<&Bound<'_, PyAny>>,
         family: &str,
         group: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<MessageInitializer<Self>> {
         let family = parameter_family(family)?;
         let mut value = messages::ParameterSet::new(0, value)
             .and_then(|v| v.with_family(family))
@@ -904,7 +983,7 @@ impl ParameterSet {
                 .with_channel(integer(channel, "channel")?)
                 .map_err(value_error)?;
         }
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+        Ok(MessageInitializer(Self { value }))
     }
     #[getter]
     fn parameter(&self) -> u16 {
@@ -1013,7 +1092,7 @@ impl ParameterStep {
         channel: Option<&Bound<'_, PyAny>>,
         family: &str,
         group: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<MessageInitializer<Self>> {
         use middy::controls::StepDirection;
         let family = parameter_family(family)?;
         let direction = match direction {
@@ -1036,7 +1115,7 @@ impl ParameterStep {
                 .with_channel(integer(channel, "channel")?)
                 .map_err(value_error)?;
         }
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+        Ok(MessageInitializer(Self { value }))
     }
     #[getter]
     fn parameter(&self) -> u16 {
@@ -1265,6 +1344,24 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 #[test]
 fn python_representation_contract_and_measurements() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    unsafe extern "C" fn count_allocations(
+        class: *mut pyo3::ffi::PyTypeObject,
+        count: pyo3::ffi::Py_ssize_t,
+    ) -> *mut pyo3::ffi::PyObject {
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        unsafe { pyo3::ffi::PyType_GenericAlloc(class, count) }
+    }
+
+    struct RestoreAllocator(*mut pyo3::ffi::PyTypeObject, pyo3::ffi::allocfunc);
+    impl Drop for RestoreAllocator {
+        fn drop(&mut self) {
+            unsafe { (*self.0).tp_alloc = Some(self.1) };
+        }
+    }
+
     Python::initialize();
     Python::attach(|py| {
         let module = PyModule::new(py, "middy.messages").unwrap();
@@ -1283,6 +1380,41 @@ fn python_representation_contract_and_measurements() {
             .call1((&module,))
             .map_err(|error| error.display(py))
             .unwrap();
+        let note = module.getattr("NoteOn").unwrap().call1((60,)).unwrap();
+        let class = py.get_type::<NoteOn>().as_type_ptr();
+        // The GIL stays held while this class's allocator is temporarily replaced.
+        let original = unsafe { (*class).tp_alloc.unwrap() };
+        assert!(std::ptr::fn_addr_eq(
+            original,
+            pyo3::ffi::PyType_GenericAlloc as pyo3::ffi::allocfunc
+        ));
+        let restore = RestoreAllocator(class, original);
+        unsafe { (*class).tp_alloc = Some(count_allocations) };
+        let changes = PyDict::new(py);
+        changes.set_item("stream", "keyboard").unwrap();
+        changes.set_item("note", 61).unwrap();
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        let tagged = note.call_method("replace", (), Some(&changes)).unwrap();
+        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 1);
+        assert_eq!(tagged.getattr("note").unwrap().extract::<u8>().unwrap(), 61);
+        assert_eq!(note.getattr("note").unwrap().extract::<u8>().unwrap(), 60);
+        assert_eq!(
+            tagged
+                .getattr("stream")
+                .unwrap()
+                .extract::<String>()
+                .unwrap(),
+            "keyboard"
+        );
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        let copied = tagged.call_method0("replace").unwrap();
+        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 1);
+        assert!(copied.eq(&tagged).unwrap());
+        changes.set_item("note", 128).unwrap();
+        ALLOCATIONS.store(0, Ordering::Relaxed);
+        assert!(tagged.call_method("replace", (), Some(&changes)).is_err());
+        assert_eq!(ALLOCATIONS.load(Ordering::Relaxed), 0);
+        drop(restore);
         let results = fixture
             .getattr("measure")
             .unwrap()

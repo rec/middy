@@ -272,8 +272,15 @@ macro_rules! message_classes {
                     PyClassInitializer::from(Message::default()).add_subclass($name { value }))?.into_any())),*
             }
         }
-        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-            crate::messages::rebuild_message!(object, base; $($name),*);
+        pub(crate) fn construct(object: &Bound<'_, PyAny>, fields: &Bound<'_, PyDict>, metadata: &Option<std::sync::Arc<crate::messages::Metadata>>) -> PyResult<Option<Py<PyAny>>> {
+            use crate::messages::{field, optional_field};
+            crate::messages::construct_message!(object, metadata;
+                BulkDumpRequest => BulkDumpRequest::new(&field(fields,"device_id")?, &field(fields,"program")?, optional_field(fields,"bank")?.as_ref()),
+                BulkDump => BulkDump::new(&field(fields,"device_id")?, &field(fields,"program")?, &field(fields,"name")?, &field(fields,"table")?, optional_field(fields,"bank")?.as_ref()),
+                ScaleOctaveDump => ScaleOctaveDump::new(&field(fields,"device_id")?, &field(fields,"bank")?, &field(fields,"program")?, &field(fields,"name")?, &field(fields,"offsets")?),
+                NoteChange => NoteChange::new(&field(fields,"device_id")?, &field(fields,"program")?, &field(fields,"changes")?, optional_field(fields,"bank")?.as_ref(), crate::messages::converted_field(fields,"realtime",flag)?),
+                ScaleOctaveChange => ScaleOctaveChange::new(&field(fields,"device_id")?, &field(fields,"realtime")?, &field(fields,"channels")?, &field(fields,"offsets")?)
+            );
             Ok(None)
         }
         fn register_messages(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -285,41 +292,41 @@ macro_rules! message_classes {
 message_classes! {
     BulkDumpRequest {device_id:int=>number:PyInt,program:int=>number:PyInt,bank:optional_int=>optional_number:PyInt} {
         #[new] #[pyo3(signature=(*,device_id,program,bank=None))]
-        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>) -> PyResult<PyClassInitializer<Self>> {
+        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let mut value = model::BulkDumpRequest::new(int(device_id)?, int(program)?).map_err(value_error)?;
             if let Some(bank) = bank { value = value.with_bank(int(bank)?).map_err(value_error)?; }
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
     };
     BulkDump {device_id:int=>number:PyInt,program:int=>number:PyInt,name:text=>string:PyString,table:table=>table_object:TuningTable,bank:optional_int=>optional_number:PyInt} {
         #[new] #[pyo3(signature=(*,device_id,program,name,table,bank=None))]
-        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, name: &Bound<'_, PyAny>, table: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>) -> PyResult<PyClassInitializer<Self>> {
+        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, name: &Bound<'_, PyAny>, table: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let mut value = model::BulkDump::new(int(device_id)?, int(program)?, text(name)?, self::table(table)?).map_err(value_error)?;
             if let Some(bank) = bank { value = value.with_bank(int(bank)?).map_err(value_error)?; }
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
     };
     ScaleOctaveDump {device_id:int=>number:PyInt,bank:int=>number:PyInt,program:int=>number:PyInt,name:text=>string:PyString,offsets:offsets=>offsets_object:ScaleOffsets} {
         #[new] #[pyo3(signature=(*,device_id,bank,program,name,offsets))]
-        fn new(device_id: &Bound<'_, PyAny>, bank: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, name: &Bound<'_, PyAny>, offsets: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        fn new(device_id: &Bound<'_, PyAny>, bank: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, name: &Bound<'_, PyAny>, offsets: &Bound<'_, PyAny>) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let value = model::ScaleOctaveDump::new(int(device_id)?, int(bank)?, int(program)?, text(name)?, self::offsets(offsets)?).map_err(value_error)?;
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
     };
     NoteChange {device_id:int=>number:PyInt,program:int=>number:PyInt,changes:changes=>changes_tuple:PyTuple,bank:optional_int=>optional_number:PyInt,realtime:flag=>boolean:PyBool} {
         #[new] #[pyo3(signature=(*,device_id,program,changes,bank=None,realtime=true))]
-        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, changes: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>, #[pyo3(from_py_with=flag)] realtime: bool) -> PyResult<PyClassInitializer<Self>> {
+        fn new(device_id: &Bound<'_, PyAny>, program: &Bound<'_, PyAny>, changes: &Bound<'_, PyAny>, bank: Option<&Bound<'_, PyAny>>, #[pyo3(from_py_with=flag)] realtime: bool) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let mut value = model::NoteChange::new(int(device_id)?, int(program)?, self::changes(changes)?).map_err(value_error)?;
             if let Some(bank) = bank { value = value.with_bank(int(bank)?).map_err(value_error)?; }
             value = value.with_realtime(realtime).map_err(value_error)?;
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
     };
     ScaleOctaveChange {device_id:int=>number:PyInt,realtime:flag=>boolean:PyBool,channels:channels=>integer_tuple:PyTuple,offsets:offsets=>offsets_object:ScaleOffsets} {
         #[new] #[pyo3(signature=(*,device_id,realtime,channels,offsets))]
-        fn new(device_id: &Bound<'_, PyAny>, realtime: &Bound<'_, PyAny>, channels: &Bound<'_, PyAny>, offsets: &Bound<'_, PyAny>) -> PyResult<PyClassInitializer<Self>> {
+        fn new(device_id: &Bound<'_, PyAny>, realtime: &Bound<'_, PyAny>, channels: &Bound<'_, PyAny>, offsets: &Bound<'_, PyAny>) -> PyResult<crate::messages::MessageInitializer<Self>> {
             let value = model::ScaleOctaveChange::new(int(device_id)?, flag(realtime)?, self::channels(channels)?, self::offsets(offsets)?).map_err(value_error)?;
-            Ok(PyClassInitializer::from(Message::default()).add_subclass(Self { value }))
+            Ok(crate::messages::MessageInitializer(Self { value }))
         }
     };
 }
@@ -712,14 +719,11 @@ pub(crate) fn replacement<'py>(
             values.set_item(name, value)?;
         }
     }
-    let result = object.get_type().call((), Some(&values))?;
     if let Some(metadata) = metadata {
-        if metadata.is_some() {
-            return crate::messages::rebuild(&result, &Message::from_metadata(metadata)?)
-                .map(|v| v.into_bound(object.py()));
-        }
+        return crate::messages::construct(object, &values, &metadata)
+            .map(|v| v.into_bound(object.py()));
     }
-    Ok(result)
+    object.get_type().call((), Some(&values))
 }
 
 pub(crate) fn decoded_object(py: Python<'_>, value: model::Decoded) -> PyResult<Py<PyAny>> {

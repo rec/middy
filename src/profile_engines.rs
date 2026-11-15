@@ -1,15 +1,21 @@
 //! Python views of the pure Rust profile engines.
 use super::{hash, int, mpe, object, timecode, value_error};
-use crate::messages::{self, Message};
+use crate::messages::{self, field, Message};
 use middy::messages::PrimitiveMessage;
 use middy::{controls as velocity, gm as gm_model, mpe as mpe_model, timecode as tc};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 
-pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
-    crate::messages::rebuild_message!(object, base;
-        ControllerDestination {max_entries}, KeyBasedControl {max_entries}, GlobalParameterControl {max_entries});
+pub(crate) fn construct(
+    object: &Bound<'_, PyAny>,
+    fields: &Bound<'_, PyDict>,
+    metadata: &Option<std::sync::Arc<crate::messages::Metadata>>,
+) -> PyResult<Option<Py<PyAny>>> {
+    crate::messages::construct_message!(object, metadata;
+        ControllerDestination => ControllerDestination::new(&field(fields,"device_id")?, &field(fields,"channel")?, &field(fields,"source")?, &field(fields,"controller")?, &field(fields,"entries")?, crate::messages::converted_field(fields,"max_entries",limit)?),
+        KeyBasedControl => KeyBasedControl::new(&field(fields,"device_id")?, &field(fields,"channel")?, &field(fields,"note")?, &field(fields,"entries")?, crate::messages::converted_field(fields,"max_entries",limit)?),
+        GlobalParameterControl => GlobalParameterControl::new(&field(fields,"device_id")?, &field(fields,"slot_path")?, &field(fields,"parameter_width")?, &field(fields,"value_width")?, &field(fields,"entries")?, crate::messages::converted_field(fields,"max_entries",limit)?));
     Ok(None)
 }
 
@@ -41,8 +47,8 @@ frozen!(ControllerDestination;device_id,channel,source,controller,entries;{
         controller: &Bound<'_, PyAny>,
         entries: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=limit)] max_entries: usize,
-    ) -> PyResult<PyClassInitializer<Self>> {
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
+    ) -> PyResult<crate::messages::MessageInitializer<Self>> {
+        Ok(crate::messages::MessageInitializer(Self {
             value: gm_model::ControllerDestination::new(
                 int(device_id)?,
                 int(channel)?,
@@ -100,8 +106,8 @@ frozen!(KeyBasedControl;device_id,channel,note,entries;{
         note: &Bound<'_, PyAny>,
         entries: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=limit)] max_entries: usize,
-    ) -> PyResult<PyClassInitializer<Self>> {
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
+    ) -> PyResult<crate::messages::MessageInitializer<Self>> {
+        Ok(crate::messages::MessageInitializer(Self {
             value: gm_model::KeyBasedControl::new(
                 int(device_id)?,
                 int(channel)?,
@@ -151,7 +157,7 @@ frozen!(GlobalParameterControl;device_id,slot_path,parameter_width,value_width,e
         value_width: &Bound<'_, PyAny>,
         entries: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=limit)] max_entries: usize,
-    ) -> PyResult<PyClassInitializer<Self>> {
+    ) -> PyResult<crate::messages::MessageInitializer<Self>> {
         let mut values = Vec::new();
         for entry in sequence(entries, max_entries)? {
             let pair = sequence(&entry, 2)?;
@@ -174,7 +180,7 @@ frozen!(GlobalParameterControl;device_id,slot_path,parameter_width,value_width,e
             .iter()
             .map(int)
             .collect::<PyResult<_>>()?;
-        Ok(PyClassInitializer::from(Message::default()).add_subclass(Self {
+        Ok(crate::messages::MessageInitializer(Self {
             value: gm_model::GlobalParameterControl::new(
                 int(device_id)?,
                 path,
