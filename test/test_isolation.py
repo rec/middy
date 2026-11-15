@@ -868,6 +868,29 @@ def test_port_collection_follows_only_matching_devices_and_opens_overlaps_once(
         assert receive(0.2) is None
 
 
+@pytest.mark.parametrize("port", ["Keyboard *", ["Keyboard *"]])
+def test_string_and_singleton_collection_follow_all_current_and_future_matches(
+    workers: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    port: str | list[str],
+) -> None:
+    topology = tmp_path / "one-pattern"
+    topology.write_text("Pad\n")
+    monkeypatch.setenv("MIDDY_TEST_MODE", "hotplug")
+    monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
+    with midi.Input(port=port, run_in_subprocess=True) as source:
+        assert source.receive(timeout=0.2) is None
+        topology.write_text("Pad\nKeyboard A\nKeyboard B\n")
+        received = [source.receive(timeout=3) for _ in range(2)]
+        assert {
+            m.port.name
+            for m in received
+            if isinstance(m, messages.Message) and m.port is not None
+        } == {"Keyboard A", "Keyboard B"}
+        assert source.receive(timeout=0.2) is None
+
+
 def test_empty_port_collection_stays_empty_when_devices_appear(
     workers: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

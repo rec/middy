@@ -145,8 +145,9 @@ Rust `Metadata.stream` uses `Option<Arc<str>>`; `Message::stream()` still return
 `Option<&str>`, and `with_stream` continues accepting strings.
 By default, `Input()` listens to all visible inputs of the selected backend and
 encoding, checking every 100 ms for newly connected or removed ports. It opens
-even with no devices present. A port pattern or explicit discovery snapshot
-selects one input. Each connection has its own decoder, stream and clock.
+even with no devices present. A port pattern follows all matching inputs;
+an explicit discovery snapshot selects one device. Each connection has its own
+decoder, stream and clock.
 `Input(port=["Keyboard *", "Pad[12]"])` follows the union of matching names,
 including future connections. Rust uses `.with_ports(["Keyboard *", "Pad[12]"])?`.
 Entries use the same case-sensitive substring/shell matching as a single selector;

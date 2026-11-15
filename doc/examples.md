@@ -35,8 +35,9 @@ for message in md.Input():
 
 `Input()` listens to all inputs exposed by the selected backend and encoding,
 including devices connected after opening. It can open with no devices present;
-discovery runs every 100 ms. Use `Input(port='Keyboard')` to select a unique name
-or pattern, or connect one snapshot returned by `input.ports()`.
+discovery runs every 100 ms. `Input(port='Keyboard')` follows all ports matching
+that name substring or shell pattern, just like `Input(port=['Keyboard'])`.
+Connect one snapshot returned by `input.ports()` to select exactly one device.
 
 Supply a collection to follow every port matching any entry, including devices
 connected later. Matches use case-sensitive name substrings or shell patterns:
@@ -333,7 +334,8 @@ def show(entry: md.inspection.MonitorEntry) -> None:
     print(entry.message or entry.diagnostic or entry.transport_drop_total)
 
 
-with md.Input(port='Keyboard') as source:
+source = md.Input()
+with source.connect(source.ports()[0]):
     monitor = md.Monitor(stream=source.stream, clock=source.clock)
     print(md.inspection.run(monitor, source, duration=10, callback=show, metrics=True))
 ```
@@ -471,7 +473,7 @@ remain separate until explicitly assembled. MIDI 2-only musical classes live in
 
 ## Interpret controller gestures
 
-Select your input by name, then move a high-resolution controller or send RPN/NRPN changes.
+Select one input, then move a high-resolution controller or send RPN/NRPN changes.
 The interpreter combines the contributing MIDI 1 messages and reports what was
 observed. It also accepts plain messages without source or timing metadata.
 For example, CC 99=1 and CC 98=2 select NRPN 130. A later CC 98=3
@@ -508,7 +510,8 @@ Snapshots are frozen. Missing cached data returns `None`; missing components use
 import middy as md
 
 interpreter = md.ControlInterpreter()
-with md.Input(port='Keyboard') as source:
+source = md.Input()
+with source.connect(source.ports()[0]):
     for message in source.with_errors():
         if isinstance(message, Exception):
             raise message
@@ -527,16 +530,18 @@ is not performed by these interpreters.
 
 ## Track MPE notes and expression
 
-Track one named input using a lower MPE zone. The tracker reports observations
+Track one input using a lower MPE zone. The tracker reports observations
 with optional source/timing metadata; `snapshot()` returns current channel state.
 
 ```python
 import middy as md
 
 tracker = md.mpe.Tracker(zone=md.ZoneConfiguration(manager_channel=1, members=2))
-for message in md.Input(port='Keyboard'):
-    for observation in tracker.feed(message):
-        print(observation)
+source = md.Input()
+with source.connect(source.ports()[0]):
+    for message in source:
+        for observation in tracker.feed(message):
+            print(observation)
 ```
 
 `configure(zone=...)` clears tracked notes, source binding and timing context.
@@ -584,9 +589,11 @@ from time import monotonic_ns
 import middy as md
 
 assembler = md.timecode.Assembler(timeout='100 ms')
-for message in md.Input(port='Keyboard'):
-    for observation in assembler.feed(message, now_ns=monotonic_ns()):
-        print(observation)
+source = md.Input()
+with source.connect(source.ports()[0]):
+    for message in source:
+        for observation in assembler.feed(message, now_ns=monotonic_ns()):
+            print(observation)
 ```
 
 All four classes accept anonymous messages, retain metadata when present and

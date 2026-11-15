@@ -88,6 +88,52 @@ fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() 
 }
 
 #[test]
+fn string_and_singleton_selection_follow_all_matches_even_when_initially_absent() {
+    use middy::{events::InputItem, messages::Message};
+    let _serial = SERIAL.lock().unwrap();
+    let path = fixture().with_extension("one-pattern");
+    for collection in [false, true] {
+        std::fs::write(&path, "Pad\n").unwrap();
+        let mut worker = options("hotplug");
+        worker.args.push(path.clone().into_os_string());
+        let input = Input::new()
+            .with_run_in_subprocess(true)
+            .unwrap()
+            .with_subprocess_options(worker)
+            .unwrap();
+        let mut input = if collection {
+            input.with_ports(["Keyboard *"])
+        } else {
+            input.with_port("Keyboard *")
+        }
+        .unwrap();
+        assert!(input
+            .receive(Some(Duration::from_millis(200)), None)
+            .unwrap()
+            .is_none());
+        std::fs::write(&path, "Pad\nKeyboard A\nKeyboard B\n").unwrap();
+        let mut names = std::collections::BTreeSet::new();
+        for _ in 0..2 {
+            let Some(InputItem::Message(message)) =
+                input.receive(Some(Duration::from_secs(3)), None).unwrap()
+            else {
+                panic!("matching input expected")
+            };
+            names.insert(message.port().unwrap().name.clone());
+        }
+        assert_eq!(
+            names,
+            ["Keyboard A".to_owned(), "Keyboard B".to_owned()].into()
+        );
+        assert!(input
+            .receive(Some(Duration::from_millis(200)), None)
+            .unwrap()
+            .is_none());
+        input.close().unwrap();
+    }
+}
+
+#[test]
 fn an_empty_input_selection_never_falls_back_to_all_ports() {
     let _serial = SERIAL.lock().unwrap();
     let mut input = Input::new()

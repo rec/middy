@@ -185,8 +185,6 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
     ) -> Input[T]:
         if port is not None and not isinstance(port, midi.Port):
             raise TypeError("port must be a discovery snapshot")
-        if port is None and isinstance(self.port, str):
-            port = _native.select_port(self.ports(), self.port, "input")
         self._open(port, None, callback)
         return self
 
@@ -227,7 +225,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
                 connection.stream,
                 self.sysex_limit,
                 self.raw,
-                self.port if isinstance(self.port, list) else None,
+                [self.port] if isinstance(self.port, str) else self.port,
             )
             if connection._all
             else self._native_client.connect(

@@ -96,8 +96,9 @@ let mut out = output.connect(&ports[0])?;
 out.close()?;
 ```
 
-This discovery example assumes there is at least one output. `Input` supports
-the same selection methods. The low-level `transport` module exposes native
+This discovery example assumes there is at least one output. `Input` also selects
+one discovery snapshot with `connect`; its pattern selectors follow all matches.
+The low-level `transport` module exposes native
 driver primitives; high-level Input/Output also support virtual ports and callbacks.
 Closing is terminal;
 create a new object to reconnect. Python `connect()` returns the same object; Rust
@@ -115,8 +116,10 @@ for message in Input::new() {
 ```
 
 The default input opens even when no devices are present and checks for new or
-removed ports every 100 ms within the selected backend and encoding. Use
-`with_port("Keyboard")?` or `connect(&ports[index])?` to select one port.
+removed ports every 100 ms within the selected backend and encoding.
+`with_port("Keyboard")?` follows all matches, including ports connected later,
+just like `with_ports(["Keyboard"])?`. Use `connect(&ports[index])?` to select
+exactly one discovery snapshot.
 Use `with_ports` for the union of case-sensitive name substrings or shell patterns,
 including future matches. Patterns support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`;
 overlapping entries open a port once. An empty collection selects no ports.
@@ -678,7 +681,9 @@ This is the same ten-second passive monitor, with native typed entries:
 use middy::{inspection, midi::Input};
 use std::time::Duration;
 
-let mut input = Input::new().with_port("Keyboard")?;
+let mut input = Input::new();
+let ports = input.ports()?;
+let mut input = input.connect(&ports[0])?;
 let source = input.stream()?.to_owned();
 let clock = input.clock()?.clone();
 let mut monitor = inspection::Monitor::new(source, clock, Default::default())?;
@@ -842,7 +847,9 @@ use middy::events::InputItem;
 use middy::midi::Input;
 
 let mut interpreter = ControlInterpreter::new(None)?;
-let mut input = Input::new().with_port("Keyboard")?;
+let mut input = Input::new();
+let ports = input.ports()?;
+let mut input = input.connect(&ports[0])?;
 for item in input.with_errors() {
     let observations = match item? {
         InputItem::Message(message) => interpreter.feed(&message)?,
