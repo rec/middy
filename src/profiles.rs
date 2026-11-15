@@ -430,6 +430,10 @@ pub fn register_timecode(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 macro_rules! primitives {
     ($($module:ident :: $name:ident),*)=>{
+        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::rebuild_message!(object, base; $($module::$name,)* mpe::ZoneConfiguration);
+            engines::rebuild(object, base)
+        }
         pub fn encode_message(message:&Bound<'_,PyAny>)->Option<Vec<u8>> {$(if let Ok(value)=message.extract::<PyRef<'_,$module::$name>>() {return Some(value.value.encode().expect("validated system message"));})*engines::encode_message(message)}
     };
 }
@@ -451,6 +455,17 @@ pub fn extract_command(
         )));
     }
     Ok(None)
+}
+pub(crate) fn zone_configuration_to_python(
+    py: Python<'_>,
+    value: middy::mpe::ZoneConfiguration,
+    base: Message,
+) -> PyResult<Py<PyAny>> {
+    Ok(Py::new(
+        py,
+        PyClassInitializer::from(base).add_subclass(mpe::ZoneConfiguration { value }),
+    )?
+    .into_any())
 }
 pub fn command_wire(
     command: &middy::messages::AnyCommand,

@@ -54,11 +54,15 @@ macro_rules! values {
             $(if let Ok(v) = v.extract::<PyRef<'_, $name>>() { return Some(model::AnyMessage::$name(v.value.clone())); })*
             None
         }
-        fn plain_to_python(py: Python<'_>, value: model::AnyMessage) -> PyResult<Py<PyAny>> {
+        fn plain_to_python(py: Python<'_>, value: model::AnyMessage, base: Message) -> PyResult<Py<PyAny>> {
             match value {
-                $(model::AnyMessage::$name(value) => Ok(Py::new(py, PyClassInitializer::from(Message::default()).add_subclass($name { value }))?.into_any()),)*
+                $(model::AnyMessage::$name(value) => Ok(Py::new(py, PyClassInitializer::from(base).add_subclass($name { value }))?.into_any()),)*
                 _ => unreachable!("MIDI 2-only semantic type"),
             }
+        }
+        fn rebuild_plain(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::rebuild_message!(object, base; $($name),*);
+            Ok(None)
         }
         fn register_plain(module: &Bound<'_, PyModule>) -> PyResult<()> {
             $(module.add_class::<$name>()?;)*
@@ -116,8 +120,12 @@ macro_rules! family_values {
             $(if let Ok(value)=value.extract::<PyRef<'_,$name>>() {return Some(model::AnyMessage::$name(value.value.clone()));})*
             extract_plain(value)
         }
-        pub(crate) fn to_python(py:Python<'_>,value:model::AnyMessage)->PyResult<Py<PyAny>> {
-            match value {$(model::AnyMessage::$name(value)=>Ok(Py::new(py,PyClassInitializer::from(Message::default()).add_subclass($name{value}))?.into_any()),)*value=>plain_to_python(py,value)}
+        pub(crate) fn to_python(py:Python<'_>,value:model::AnyMessage,base:Message)->PyResult<Py<PyAny>> {
+            match value {$(model::AnyMessage::$name(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass($name{value}))?.into_any()),)*value=>plain_to_python(py,value,base)}
+        }
+        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::rebuild_message!(object, base; $($name),*);
+            rebuild_plain(object, base)
         }
         pub(crate) fn register(module:&Bound<'_,PyModule>)->PyResult<()> {register_plain(module)?; $(module.add_class::<$name>()?;)*Ok(())}
     };

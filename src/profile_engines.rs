@@ -7,6 +7,12 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 
+pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+    crate::messages::rebuild_message!(object, base;
+        ControllerDestination {max_entries}, KeyBasedControl {max_entries}, GlobalParameterControl {max_entries});
+    Ok(None)
+}
+
 macro_rules! frozen {
     ($name:ident; $($field:ident),*; {$($methods:item)*}) => {
         #[pymethods]

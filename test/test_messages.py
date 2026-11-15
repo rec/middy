@@ -7,13 +7,17 @@ from subprocess import run
 
 from native import middy_messages
 
+import middy
 from middy import events, messages
 
 
 def test_optional_provenance_does_not_inflate_message_objects() -> None:
-    assert messages.Message.__basicsize__ <= object.__basicsize__ + 2 * calcsize("P")
+    assert messages.Message.__basicsize__ == object.__basicsize__ + calcsize("P")
     clock = events.Clock(identity="capture", origin="test")
     timestamp = events.Timestamp(ticks=12, clock=clock)
+    port = events.PortInfo(
+        name="Keyboard", backend=middy.Backend.CoreMidi, backend_id=1
+    )
     span = events.SourceSpan(
         first_packet=1,
         last_packet=1,
@@ -27,7 +31,8 @@ def test_optional_provenance_does_not_inflate_message_objects() -> None:
         messages.TimingClock(),
         messages.SysEx(b""),
     ]:
-        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span)
+        tagged = m.replace(port=port, timestamp=timestamp, stream="keyboard", span=span)
+        assert tagged.port == port and m.port is None
         assert sys.getsizeof(m) <= object.__basicsize__ + 8 * calcsize("P")
         assert sys.getsizeof(tagged) == sys.getsizeof(m)
         assert (tagged.timestamp, tagged.stream, tagged.span) == (
@@ -37,7 +42,63 @@ def test_optional_provenance_does_not_inflate_message_objects() -> None:
         )
         assert m.timestamp is None and m.stream is None and m.span is None
         sizes[type(m).__name__] = sys.getsizeof(m)
+    print("Python Message base size:", messages.Message.__basicsize__)
     print("Python fixed message sizes:", sizes)
+
+
+def test_profile_replacements_construct_immutable_metadata() -> None:
+    timestamp = events.Timestamp(ticks=12, clock=events.Clock(identity="capture"))
+    port = events.PortInfo(
+        name="Keyboard", backend=middy.Backend.CoreMidi, backend_id=1
+    )
+    span = events.SourceSpan(first_packet=1, last_packet=1)
+    for m in [
+        middy.GmMode("gm1", device_id=127),
+        middy.IdentityRequest(device_id=127),
+        middy.ZoneConfiguration(manager_channel=1, members=4),
+        middy.timecode.FullFrame(
+            device_id=127,
+            rate=middy.FrameRate.Fps24,
+            hours=0,
+            minutes=0,
+            seconds=0,
+            frames=0,
+        ),
+        middy.tuning.BulkDumpRequest(device_id=0, program=0),
+        middy.ci.EndpointInquiry(
+            header=middy.ci.Header(source_muid=1, destination_muid=2)
+        ),
+        middy.ump.Noop(),
+        messages.PerNotePitchBend(group=1, channel=1, note=60, value=0),
+        middy.gm.KeyBasedControl(
+            device_id=127, channel=1, note=60, entries=[(7, 10)], max_entries=4
+        ),
+    ]:
+        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span)
+        copied = tagged.replace()
+        assert type(copied) is type(m)
+        assert copied == m and hash(copied) == hash(m)
+        assert (copied.timestamp, copied.stream, copied.span) == (
+            timestamp,
+            "keyboard",
+            span,
+        )
+        assert m.timestamp is None and m.stream is None and m.span is None
+        cleared = tagged.replace(timestamp=None, stream=None, span=None)
+        assert (
+            cleared.timestamp is None
+            and cleared.stream is None
+            and cleared.span is None
+        )
+        assert (tagged.timestamp, tagged.stream, tagged.span) == (
+            timestamp,
+            "keyboard",
+            span,
+        )
+        assert getattr(copied, "max_entries", None) == getattr(m, "max_entries", None)
+        port_only = m.replace(port=port)
+        assert port_only.port == port and port_only.replace().port == port
+        assert m.port is None and port_only.replace(port=None).port is None
 
 
 def test_midi2_controller_families_preserve_values_and_per_note_validation() -> None:

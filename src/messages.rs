@@ -10,10 +10,10 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyTuple};
 
-#[pyclass(frozen, subclass, module = "middy.messages")]
-#[derive(Default)]
+#[pyclass(frozen, subclass, skip_from_py_object, module = "middy.messages")]
+#[derive(Clone, Default)]
 pub(crate) struct Message {
-    metadata: std::sync::OnceLock<Option<std::sync::Arc<Metadata>>>,
+    metadata: Option<std::sync::Arc<Metadata>>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct Metadata {
@@ -24,9 +24,9 @@ pub(crate) struct Metadata {
 }
 impl Message {
     pub(crate) fn metadata(&self) -> Option<&std::sync::Arc<Metadata>> {
-        self.metadata.get().and_then(Option::as_ref)
+        self.metadata.as_ref()
     }
-    pub(crate) fn attach(&self, metadata: Option<std::sync::Arc<Metadata>>) -> PyResult<()> {
+    pub(crate) fn from_metadata(metadata: Option<std::sync::Arc<Metadata>>) -> PyResult<Self> {
         if let Some(metadata) = &metadata {
             if metadata.stream.as_ref().is_some_and(|s| s.is_empty()) {
                 return Err(PyValueError::new_err("empty stream identity"));
@@ -36,13 +36,26 @@ impl Message {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
             }
         }
-        self.metadata
-            .set(metadata.filter(|m| {
+        Ok(Self {
+            metadata: metadata.filter(|m| {
                 m.port.is_some() || m.timestamp.is_some() || m.stream.is_some() || m.span.is_some()
-            }))
-            .map_err(|_| PyValueError::new_err("message metadata is already set"))
+            }),
+        })
     }
 }
+
+macro_rules! rebuild_message {
+    ($object:expr, $base:expr; $($class:path $( { $($field:ident),* } )?),+ $(,)?) => {$({
+        use $class as RebuildClass;
+        if let Ok(value) = $object.extract::<PyRef<'_, RebuildClass>>() {
+            return Ok(Some(Py::new($object.py(),
+                PyClassInitializer::from($base.clone()).add_subclass(RebuildClass {
+                    value: value.value.clone(), $($($field: value.$field,)*)?
+                }))?.into_any()));
+        }
+    })+};
+}
+pub(crate) use rebuild_message;
 
 #[pymethods]
 impl Message {
@@ -680,13 +693,32 @@ macro_rules! short_messages {
         }
 
         pub fn to_python(py: Python<'_>, message: messages::AnyMessage) -> PyResult<Py<PyAny>> {
+            to_python_with_base(py, message, Message::default())
+        }
+
+        pub(crate) fn to_python_with_base(py: Python<'_>, message: messages::AnyMessage, base: Message) -> PyResult<Py<PyAny>> {
             match message {
                 messages::AnyMessage::SysEx(value) => Ok(Py::new(py,
-                    PyClassInitializer::from(Message::default()).add_subclass(SysEx { value }))?.into_any()),
+                    PyClassInitializer::from(base).add_subclass(SysEx { value }))?.into_any()),
                 $(messages::AnyMessage::$name(value) => Ok(Py::new(py,
-                    PyClassInitializer::from(Message::default()).add_subclass($name::from_value(value)))?.into_any()),)*
-                v => crate::messages_midi2::to_python(py, v),
+                    PyClassInitializer::from(base).add_subclass($name::from_value(value)))?.into_any()),)*
+                v => crate::messages_midi2::to_python(py, v, base),
             }
+        }
+
+        fn rebuild_primitive(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            rebuild_message!(object, base; SysEx, $($name,)* ParameterSet, ParameterStep);
+            Ok(None)
+        }
+        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Py<PyAny>> {
+            for rebuild in [
+                rebuild_primitive,
+                crate::messages_midi2::rebuild, crate::ump::rebuild,
+                crate::tuning::rebuild, crate::profiles::rebuild, crate::ci::rebuild,
+            ] {
+                if let Some(value) = rebuild(object, base)? { return Ok(value); }
+            }
+            Err(PyTypeError::new_err("unsupported native Message class"))
         }
 
 
@@ -716,6 +748,30 @@ short_messages! {
 fn register_commands(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<ParameterSet>()?;
     module.add_class::<ParameterStep>()
+}
+pub(crate) fn command_to_python(
+    py: Python<'_>,
+    value: messages::AnyCommand,
+    base: Message,
+) -> PyResult<Py<PyAny>> {
+    macro_rules! object {
+        ($class:ident, $value:expr) => {
+            Ok(Py::new(
+                py,
+                PyClassInitializer::from(base).add_subclass($class { value: $value }),
+            )?
+            .into_any())
+        };
+    }
+    match value {
+        messages::AnyCommand::ControlChange(value) => object!(ControlChange, value),
+        messages::AnyCommand::ParameterSet(value) => object!(ParameterSet, value),
+        messages::AnyCommand::ParameterStep(value) => object!(ParameterStep, value),
+        messages::AnyCommand::ProgramChange(value) => object!(ProgramChange, value),
+        messages::AnyCommand::ZoneConfiguration(value) => {
+            crate::profiles::zone_configuration_to_python(py, value, base)
+        }
+    }
 }
 pub fn extract_command(command: &Bound<'_, PyAny>) -> PyResult<messages::AnyCommand> {
     macro_rules! extract { ($($name:ident),*) => { $(

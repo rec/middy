@@ -65,17 +65,22 @@ macro_rules! scalar {
             $(if let Ok(v)=value.extract::<PyRef<'_,$name>>(){return Ok(model::PacketValue::$name(v.value.clone()));})*
             extract_packet(value)
         }
-        pub(crate) fn to_python(py:Python<'_>,value:model::PacketValue)->PyResult<Py<PyAny>>{match value{
-            model::PacketValue::Noop(value)=>object(py,Noop{value}),
+        pub(crate) fn to_python(py:Python<'_>,value:model::PacketValue,base:Message)->PyResult<Py<PyAny>>{match value{
+            model::PacketValue::Noop(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(Noop{value}))?.into_any()),
 
-            $(model::PacketValue::$name(value)=>object(py,$name{value}),)*
-            model::PacketValue::SysEx7(value)=>object(py,SysEx7Packet{value}),
-            model::PacketValue::SysEx8(value)=>object(py,SysEx8Packet{value}),
-            model::PacketValue::MixedDataSet(value)=>object(py,MixedDataSet{value}),
-            model::PacketValue::FlexData(value)=>object(py,FlexData{value}),
-            model::PacketValue::Stream(value)=>object(py,StreamMessage{value}),
-            model::PacketValue::Opaque(value)=>object(py,OpaquePacket{value}),
+            $(model::PacketValue::$name(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass($name{value}))?.into_any()),)*
+            model::PacketValue::SysEx7(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(SysEx7Packet{value}))?.into_any()),
+            model::PacketValue::SysEx8(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(SysEx8Packet{value}))?.into_any()),
+            model::PacketValue::MixedDataSet(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(MixedDataSet{value}))?.into_any()),
+            model::PacketValue::FlexData(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(FlexData{value}))?.into_any()),
+            model::PacketValue::Stream(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(StreamMessage{value}))?.into_any()),
+            model::PacketValue::Opaque(value)=>Ok(Py::new(py,PyClassInitializer::from(base).add_subclass(OpaquePacket{value}))?.into_any()),
         }}
+        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::rebuild_message!(object, base; Noop, $($name,)*
+                SysEx7Packet, SysEx8Packet, MixedDataSet, FlexData, StreamMessage, OpaquePacket);
+            Ok(None)
+        }
         pub(crate) fn register(module:&Bound<'_,PyModule>)->PyResult<()>{module.add_class::<Noop>()?;$(module.add_class::<$name>()?;)*register_packets(module)}
     };
 }

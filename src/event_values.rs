@@ -58,31 +58,19 @@ pub fn payload(v: &Bound<'_, PyAny>) -> PyResult<model::Payload> {
 }
 pub fn to_python(py: Python<'_>, v: model::Payload) -> PyResult<Py<PyAny>> {
     let metadata = v.metadata().cloned().unwrap_or_default();
-    let object = match v.without_metadata() {
-        model::Payload::Message(v) => crate::messages::to_python(py, v),
-        model::Payload::Ump(v) => crate::ump::to_python(py, v),
-        model::Payload::Command(v) => {
-            let (name, kwargs) = crate::messages::command_wire(py, &v)?;
-            let module = match name.as_str() {
-                "ZoneConfiguration" => "middy.mpe",
-                _ => "middy.messages",
-            };
-            Ok(PyModule::import(py, module)?
-                .getattr(name)?
-                .call((), Some(kwargs.bind(py)))?
-                .unbind())
-        }
-    }?;
-    object
-        .bind(py)
-        .extract::<PyRef<'_, crate::messages::Message>>()?
-        .attach(Some(std::sync::Arc::new(crate::messages::Metadata {
+    let base = crate::messages::Message::from_metadata(Some(std::sync::Arc::new(
+        crate::messages::Metadata {
             port: metadata.port,
             timestamp: metadata.timestamp,
             stream: metadata.stream,
             span: metadata.span,
-        })))?;
-    Ok(object)
+        },
+    )))?;
+    match v.without_metadata() {
+        model::Payload::Message(v) => crate::messages::to_python_with_base(py, v, base),
+        model::Payload::Ump(v) => crate::ump::to_python(py, v, base),
+        model::Payload::Command(v) => crate::messages::command_to_python(py, v, base),
+    }
 }
 #[pyclass(frozen, module = "middy.events")]
 pub struct Rational {

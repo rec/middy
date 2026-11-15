@@ -485,6 +485,12 @@ pub(crate) fn to_python(py: Python<'_>, value: model::Management) -> PyResult<Py
         model::Body::Nak(_) => object!(Nak),
     }
 }
+
+pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+    crate::messages::rebuild_message!(object, base;
+        Discovery, DiscoveryReply, EndpointInquiry, EndpointReply, InvalidateMuid, Ack, Nak);
+    Ok(None)
+}
 fn updates(py: Python<'_>, values: Vec<session::Update>) -> PyResult<Vec<Py<PyAny>>> {
     values
         .into_iter()

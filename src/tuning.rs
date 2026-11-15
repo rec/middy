@@ -272,6 +272,10 @@ macro_rules! message_classes {
                     PyClassInitializer::from(Message::default()).add_subclass($name { value }))?.into_any())),*
             }
         }
+        pub(crate) fn rebuild(object: &Bound<'_, PyAny>, base: &Message) -> PyResult<Option<Py<PyAny>>> {
+            crate::messages::rebuild_message!(object, base; $($name),*);
+            Ok(None)
+        }
         fn register_messages(module: &Bound<'_, PyModule>) -> PyResult<()> {
             $(module.add_class::<$name>()?;)*
             Ok(())
@@ -710,7 +714,10 @@ pub(crate) fn replacement<'py>(
     }
     let result = object.get_type().call((), Some(&values))?;
     if let Some(metadata) = metadata {
-        result.extract::<PyRef<'_, Message>>()?.attach(metadata)?;
+        if metadata.is_some() {
+            return crate::messages::rebuild(&result, &Message::from_metadata(metadata)?)
+                .map(|v| v.into_bound(object.py()));
+        }
     }
     Ok(result)
 }
