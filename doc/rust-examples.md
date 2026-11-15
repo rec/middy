@@ -253,6 +253,21 @@ For streams use `Writer::new(stream, "syx", limit)`; empty input is an empty
 SysEx stream. `Writer::write` accepts `WriteRecord` values, including file
 records and typed primitive messages such as a tuning `BulkDump`.
 
+Choose a performance view before reading. `merged` orders SMF events by tick;
+`timed` converts SMF or Clip input to timestamped messages. These methods consume
+the reader and transfer the open stream to the iterator. SMF merging requires
+a seekable stream. Format-2 SMF requires a selected sequence index.
+
+```rust
+use middy::{Reader, Output};
+
+for event in Reader::open("song.mid")?.merged(None, 128, 8_388_608)? {
+    println!("{:?}", event?);
+}
+let timed = Reader::open("song.mid")?.timed("song".into(), None, 128, 8_388_608, false)?;
+Output::new().send(timed)?;
+```
+
 ## 7. Handle input diagnostics explicitly
 
 ```rust

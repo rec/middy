@@ -1,9 +1,7 @@
 //! RP-001 v1.0 streaming Standard MIDI Files. File records are never sent implicitly.
 use crate::codecs::{DecodeItem, Decoder};
 use crate::file_io::{invalid, Source};
-pub use crate::file_timing::{
-    export_smf as export_event, ExportReport, SmfReader as TimedReader, SmfTimeline as Timeline,
-};
+pub use crate::file_timing::{export_smf as export_event, ExportReport, SmfTimeline as Timeline};
 use crate::messages::{AnyMessage, PrimitiveMessage};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 
@@ -91,6 +89,9 @@ pub struct Reader<R> {
     failed: bool,
 }
 impl<R: Read> Reader<R> {
+    pub(crate) fn into_source(self) -> Source<R> {
+        self.source
+    }
     pub fn new(inner: R, limit: usize) -> io::Result<Self> {
         let mut source = Source::new(inner, limit)?;
         if source.array::<4>()? != *b"MThd" {
@@ -458,7 +459,7 @@ struct TrackState {
 }
 /// Seek-based performance ordering, one bounded lookahead record per selected track.
 /// Non-track chunks remain available through Reader, not this performance view.
-pub struct MergedReader<R> {
+pub(crate) struct MergedReader<R> {
     reader: Reader<R>,
     pub header: Header,
     base: u64,

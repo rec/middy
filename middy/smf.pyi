@@ -2,7 +2,6 @@
 
 from collections.abc import Iterator
 from os import PathLike
-from types import TracebackType
 from typing import BinaryIO
 
 from . import events, messages, translation
@@ -95,57 +94,6 @@ class Writer:
     ) -> None: ...
     def write(self, event: Event) -> None: ...
     def finish(self) -> None: ...
-
-class MergedReader:
-    def __init__(
-        self,
-        source: str | PathLike[str] | BinaryIO,
-        *,
-        sequence: int | None = None,
-        payload_limit: int | str = 1_048_576,
-        track_limit: int = 128,
-        buffer_limit: int | str = 8_388_608,
-    ) -> None: ...
-    @property
-    def header(self) -> Header: ...
-    def __iter__(self) -> Iterator[Event]: ...
-    def __next__(self) -> Event: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> MergedReader: ...
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
-
-class TimedReader:
-    def __init__(
-        self,
-        source: str | PathLike[str] | BinaryIO,
-        *,
-        stream: str,
-        sequence: int | None = None,
-        payload_limit: int | str = 1_048_576,
-        track_limit: int = 128,
-        buffer_limit: int | str = 8_388_608,
-    ) -> None: ...
-    @property
-    def header(self) -> Header: ...
-    @property
-    def clock(self) -> events.Clock: ...
-    @property
-    def origin(self) -> events.Timestamp: ...
-    def __iter__(self) -> Iterator[messages.Message | events.StreamDiagnostic]: ...
-    def __next__(self) -> messages.Message | events.StreamDiagnostic: ...
-    def close(self) -> None: ...
-    def __enter__(self) -> TimedReader: ...
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
 
 class ExportReport:
     @property

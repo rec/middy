@@ -174,6 +174,32 @@ fn clip_requires_timing_start_end_and_exact_big_endian_packets() {
         .unwrap();
     assert_eq!(e.len(), 8);
     assert_eq!(e[5].tick, Some(1));
+    let records = file_io::Reader::new(Cursor::new(b), 1024, false, false)
+        .unwrap()
+        .collect::<io::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        records,
+        e.iter()
+            .cloned()
+            .map(file_io::Record::Clip)
+            .collect::<Vec<_>>()
+    );
+    let timed = file_io::Reader::new(Cursor::new(b), 1024, false, false)
+        .unwrap()
+        .timed("clip".into(), None, 128, 8_388_608, false)
+        .unwrap();
+    assert!(timed.header().is_none());
+    assert_eq!(timed.origin().clock, *timed.clock());
+    assert_eq!(timed.collect::<io::Result<Vec<_>>>().unwrap().len(), 1);
+    assert!(file_io::Reader::new(Cursor::new(b), 1024, false, false)
+        .unwrap()
+        .merged(None, 128, 8192)
+        .is_err());
+    assert!(file_io::Reader::new(Cursor::new(b), 1024, false, false)
+        .unwrap()
+        .timed("clip".into(), Some(0), 128, 8_388_608, false)
+        .is_err());
     let mut out = vec![];
     {
         let mut w = clip::Writer::new(&mut out).unwrap();

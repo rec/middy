@@ -75,14 +75,19 @@ fn file() -> Vec<u8> {
 #[test]
 fn merged_tracks_apply_tempo_in_stable_order_and_preserve_leading_silence() {
     let bytes = file();
-    let merge = smf::MergedReader::new(Cursor::new(&bytes), 1024, 128, 8192, None).unwrap();
+    let merge = middy::Reader::new(Cursor::new(&bytes), 1024, false, false)
+        .unwrap()
+        .merged(None, 128, 8192)
+        .unwrap();
     let merged = merge.collect::<io::Result<Vec<_>>>().unwrap();
     assert_eq!(
         merged.iter().map(|e| (e.tick, e.track)).collect::<Vec<_>>(),
         [(0, 0), (240, 0), (240, 1), (480, 0), (480, 1), (480, 1)]
     );
-    let merge = smf::MergedReader::new(Cursor::new(&bytes), 1024, 128, 8192, None).unwrap();
-    let mut timed = smf::TimedReader::new(merge, "song".into(), None, 1024).unwrap();
+    let mut timed = middy::Reader::new(Cursor::new(&bytes), 1024, false, false)
+        .unwrap()
+        .timed("song".into(), None, 128, 8192, false)
+        .unwrap();
     let origin = timed.origin();
     assert_eq!(origin.ticks, 0);
     let result = timed.by_ref().collect::<io::Result<Vec<_>>>().unwrap();
@@ -112,7 +117,10 @@ fn merged_tracks_apply_tempo_in_stable_order_and_preserve_leading_silence() {
     );
     let mut plan = middy::events::PlaybackPlan::new(origin, vec![], false).unwrap();
     assert_eq!(plan.deadline(&events[0]).unwrap().delay_ns, 250_000_000);
-    assert!(smf::MergedReader::new(Cursor::new(&bytes), 1024, 1, 8192, None).is_err());
+    assert!(middy::Reader::new(Cursor::new(&bytes), 1024, false, false)
+        .unwrap()
+        .merged(None, 1, 8192)
+        .is_err());
 }
 #[test]
 fn independent_sequences_smpte_and_export_rounding_are_explicit() {
@@ -164,6 +172,30 @@ fn independent_sequences_smpte_and_export_rounding_are_explicit() {
         translation::TranslationStatus::ContextRequired
     );
 }
+
+#[test]
+fn performance_selection_rejects_consumed_or_unsupported_sources() {
+    let bytes = file();
+    let mut reader = middy::Reader::new(Cursor::new(&bytes), 1024, false, false).unwrap();
+    reader.next().unwrap().unwrap();
+    assert!(reader.merged(None, 128, 8192).is_err());
+    let mut reader = middy::Reader::new(Cursor::new(&bytes), 1024, false, false).unwrap();
+    reader.next().unwrap().unwrap();
+    assert!(reader.timed("s".into(), None, 128, 8192, false).is_err());
+    assert!(
+        middy::Reader::new(Cursor::new(b"\xf0\x7d\xf7"), 1024, false, false)
+            .unwrap()
+            .merged(None, 128, 8192)
+            .is_err()
+    );
+    let mut offset = Cursor::new([b"prefix".as_slice(), bytes.as_slice()].concat());
+    std::io::Seek::seek(&mut offset, std::io::SeekFrom::Start(6)).unwrap();
+    let merged = middy::Reader::new(offset, 1024, false, false)
+        .unwrap()
+        .merged(None, 128, 8192)
+        .unwrap();
+    assert_eq!(merged.collect::<io::Result<Vec<_>>>().unwrap().len(), 6);
+}
 #[test]
 fn large_escape_records_stream_and_group_routing_is_not_silently_discarded() {
     let mut b = Cursor::new(vec![]);
@@ -190,9 +222,10 @@ fn large_escape_records_stream_and_group_routing_is_not_silently_discarded() {
         .unwrap();
         w.finish().unwrap();
     }
-    let merged =
-        smf::MergedReader::new(Cursor::new(b.into_inner()), 1_048_576, 128, 8192, None).unwrap();
-    let mut reader = smf::TimedReader::new(merged, "s".into(), None, 1_048_576).unwrap();
+    let mut reader = middy::Reader::new(Cursor::new(b.into_inner()), 1_048_576, false, false)
+        .unwrap()
+        .timed("s".into(), None, 128, 8192, false)
+        .unwrap();
     assert_eq!(reader.by_ref().count(), 4096);
     let clock = reader.clock().clone();
     let origin = Timestamp {

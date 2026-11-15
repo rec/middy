@@ -1,7 +1,7 @@
 //! M2-116-U 1.0 MIDI Clip framing. All UMPs, including clock/configuration, are retained.
 use crate::events::Payload;
 use crate::file_io::{invalid, Source};
-pub use crate::file_timing::{ClipReader as TimedReader, ClipTimeline as Timeline};
+pub use crate::file_timing::ClipTimeline as Timeline;
 use crate::ump::{self, PacketValue, UmpValue};
 use std::io::{self, Read, Write};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

@@ -1,6 +1,6 @@
 //! Bounded file I/O with byte locations. No native MIDI initialization.
 use crate::messages::{Message, PrimitiveMessage};
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 
 pub(crate) mod syx;
 
@@ -110,6 +110,7 @@ pub enum Record {
     Archive(crate::archive::Record),
     Header(crate::smf::Header),
     Event(crate::smf::Event),
+    Clip(crate::clip::Entry),
 }
 impl Record {
     pub fn channel(&self) -> Option<u8> {
@@ -150,15 +151,18 @@ enum Input<R> {
     Archive(crate::archive::Reader<Prefixed<R>>),
     Smf(crate::smf::Reader<Prefixed<R>>),
     Syx(syx::Reader<Prefixed<R>>),
+    Clip(crate::clip::Reader<Prefixed<R>>),
 }
 
-/// Detect MIDI files, SysEx streams and middy archives from their contents.
+/// Detect MIDI files, MIDI Clips, SysEx streams and middy archives from contents.
 /// Use format-specific readers for other formats and detailed codec control.
 pub struct Reader<R = std::io::BufReader<std::fs::File>> {
     input: Input<R>,
     header: Option<crate::smf::Header>,
     complete: bool,
     problem: Option<String>,
+    started: bool,
+    limit: usize,
 }
 impl Reader {
     pub fn open(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
@@ -177,6 +181,9 @@ impl<R: Read> Reader<R> {
         recover: bool,
         preserve_unknown: bool,
     ) -> io::Result<Self> {
+        if limit == 0 {
+            return Err(invalid(0, "payload limit must be positive"));
+        }
         let mut prefix = Vec::new();
         (&mut inner).take(1).read_to_end(&mut prefix)?;
         let syx = prefix.is_empty() || prefix[0] == 240;
@@ -184,6 +191,7 @@ impl<R: Read> Reader<R> {
             (&mut inner).take(3).read_to_end(&mut prefix)?;
         }
         let smf = prefix == b"MThd";
+        let clip = prefix == b"SMF2";
         let inner = std::io::Cursor::new(prefix).chain(inner);
         let (input, header) = if syx {
             if recover || preserve_unknown {
@@ -203,6 +211,14 @@ impl<R: Read> Reader<R> {
             let reader = crate::smf::Reader::new(inner, limit)?;
             let header = Some(reader.header.clone());
             (Input::Smf(reader), header)
+        } else if clip {
+            if recover {
+                return Err(invalid(0, "archive recovery does not apply to Clip files"));
+            }
+            (
+                Input::Clip(crate::clip::Reader::new(inner, preserve_unknown)?),
+                None,
+            )
         } else {
             (
                 Input::Archive(crate::archive::Reader::new(
@@ -219,6 +235,8 @@ impl<R: Read> Reader<R> {
             header,
             complete: false,
             problem: None,
+            started: false,
+            limit,
         })
     }
     pub fn complete(&self) -> bool {
@@ -231,6 +249,7 @@ impl<R: Read> Reader<R> {
 impl<R: Read> Iterator for Reader<R> {
     type Item = io::Result<Record>;
     fn next(&mut self) -> Option<Self::Item> {
+        self.started = true;
         if let Some(header) = self.header.take() {
             return Some(Ok(Record::Header(header)));
         }
@@ -267,7 +286,155 @@ impl<R: Read> Iterator for Reader<R> {
                 }
                 result
             }
+            Input::Clip(reader) => {
+                let result = reader.next().map(|v| v.map(Record::Clip));
+                if let Some(Err(error)) = &result {
+                    self.problem = Some(error.to_string());
+                }
+                if result.is_none() && self.problem.is_none() {
+                    self.complete = true;
+                }
+                result
+            }
         }
+    }
+}
+
+/// One bounded lookahead event per track, in stable tick/track order.
+pub struct MergedEvents<R> {
+    reader: crate::smf::MergedReader<R>,
+}
+impl<R: Read + Seek> MergedEvents<R> {
+    pub fn header(&self) -> &crate::smf::Header {
+        &self.reader.header
+    }
+}
+impl<R: Read + Seek> Iterator for MergedEvents<R> {
+    type Item = io::Result<crate::smf::Event>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.reader.next()
+    }
+}
+
+enum TimedInput<R> {
+    Smf(crate::file_timing::SmfReader<R>),
+    Clip(crate::file_timing::ClipReader<Prefixed<R>>),
+}
+/// Timestamped performance messages. Reading does not wait in real time.
+pub struct TimedMessages<R> {
+    input: TimedInput<R>,
+}
+impl<R: Read + Seek> TimedMessages<R> {
+    pub fn header(&self) -> Option<&crate::smf::Header> {
+        match &self.input {
+            TimedInput::Smf(reader) => Some(reader.header()),
+            TimedInput::Clip(_) => None,
+        }
+    }
+    pub fn clock(&self) -> &crate::events::Clock {
+        match &self.input {
+            TimedInput::Smf(reader) => reader.clock(),
+            TimedInput::Clip(reader) => reader.clock(),
+        }
+    }
+    pub fn origin(&self) -> crate::events::Timestamp {
+        match &self.input {
+            TimedInput::Smf(reader) => reader.origin(),
+            TimedInput::Clip(reader) => reader.origin(),
+        }
+    }
+}
+impl<R: Read + Seek> Iterator for TimedMessages<R> {
+    type Item = io::Result<crate::live::Item>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.input {
+            TimedInput::Smf(reader) => reader.next(),
+            TimedInput::Clip(reader) => reader.next(),
+        }
+    }
+}
+
+impl<R: Read + Seek> Reader<R> {
+    /// Select merged SMF events before reading begins. Consumes this reader.
+    pub fn merged(
+        self,
+        sequence: Option<u16>,
+        track_limit: usize,
+        buffer_limit: usize,
+    ) -> io::Result<MergedEvents<R>> {
+        if self.started {
+            return Err(invalid(0, "select a reading mode before iteration starts"));
+        }
+        let Input::Smf(reader) = self.input else {
+            return Err(invalid(0, "merged requires a Standard MIDI File"));
+        };
+        let source = reader.into_source();
+        let (_, mut inner) = source.inner.into_inner();
+        let rewind = i64::try_from(source.offset)
+            .map_err(|_| invalid(0, "MIDI header exceeds seek range"))?;
+        inner.seek(SeekFrom::Current(-rewind))?;
+        Ok(MergedEvents {
+            reader: crate::smf::MergedReader::new(
+                inner,
+                self.limit,
+                track_limit,
+                buffer_limit,
+                sequence,
+            )?,
+        })
+    }
+
+    /// Select timestamped SMF/Clip messages before reading begins. SMF merging
+    /// requires seeking. Clip configuration is emitted only when requested.
+    pub fn timed(
+        self,
+        stream: String,
+        sequence: Option<u16>,
+        track_limit: usize,
+        buffer_limit: usize,
+        include_configuration: bool,
+    ) -> io::Result<TimedMessages<R>> {
+        if self.started {
+            return Err(invalid(0, "select a reading mode before iteration starts"));
+        }
+        let input = match self.input {
+            Input::Smf(_) => {
+                if include_configuration {
+                    return Err(invalid(
+                        0,
+                        "include_configuration applies only to Clip files",
+                    ));
+                }
+                let limit = self.limit;
+                let merged = self.merged(sequence, track_limit, buffer_limit)?;
+                TimedInput::Smf(crate::file_timing::SmfReader::new(
+                    merged.reader,
+                    stream,
+                    sequence,
+                    limit,
+                )?)
+            }
+            Input::Clip(reader) => {
+                if sequence.is_some() {
+                    return Err(invalid(0, "sequence applies only to Standard MIDI Files"));
+                }
+                if track_limit != 128 || buffer_limit != 8_388_608 {
+                    return Err(invalid(0, "merge limits apply only to Standard MIDI Files"));
+                }
+                TimedInput::Clip(crate::file_timing::ClipReader::new(
+                    reader,
+                    stream,
+                    include_configuration,
+                )?)
+            }
+            _ => {
+                return Err(invalid(
+                    0,
+                    "timed requires a Standard MIDI File or MIDI Clip",
+                ))
+            }
+        };
+        Ok(TimedMessages { input })
     }
 }
 

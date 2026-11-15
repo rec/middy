@@ -2,11 +2,12 @@
 
 from contextlib import nullcontext
 from io import BytesIO
+from pathlib import Path
 from typing import Literal
 
 import pytest
 
-from middy import clip, events, messages, smf, translation, ump
+from middy import clip, events, file_io, messages, smf, translation, ump
 
 
 def song(format: int = 1, division: int = 480) -> bytes:
@@ -36,7 +37,6 @@ def song(format: int = 1, division: int = 480) -> bytes:
 def test_reader_context_closes_on_early_exit_and_preserves_borrowed_stream(
     kind: Literal["merged", "smf", "clip"], exit_with_error: bool
 ) -> None:
-    reader: smf.MergedReader | smf.TimedReader | clip.TimedReader
     if kind == "clip":
         source = BytesIO()
         writer = clip.Writer(source)
@@ -53,14 +53,9 @@ def test_reader_context_closes_on_early_exit_and_preserves_borrowed_stream(
             writer.write(m)
         writer.finish()
         source.seek(0)
-        reader = clip.TimedReader(source, stream="clip")
     else:
         source = BytesIO(song())
-        reader = (
-            smf.MergedReader(source)
-            if kind == "merged"
-            else smf.TimedReader(source, stream="song")
-        )
+    reader = file_io.Reader(source)
     with (
         pytest.raises(RuntimeError, match="body failed")
         if exit_with_error
@@ -68,12 +63,13 @@ def test_reader_context_closes_on_early_exit_and_preserves_borrowed_stream(
     ):
         with reader as opened:
             assert opened is reader
-            assert next(opened) is not None
+            view = opened.merged() if kind == "merged" else opened.timed(stream="song")
+            assert next(view) is not None
             if exit_with_error:
                 raise RuntimeError("body failed")
     assert not source.closed
-    with pytest.raises(OSError, match="closed"):
-        next(reader)
+    with pytest.raises(ValueError, match="closed"):
+        next(view)
     with pytest.raises(ValueError, match="closed"):
         with reader:
             pytest.fail("closed reader was entered")
@@ -81,11 +77,13 @@ def test_reader_context_closes_on_early_exit_and_preserves_borrowed_stream(
 
 
 def test_incremental_smf_timeline_matches_file_timing_and_finishes_fragments() -> None:
-    with smf.MergedReader(BytesIO(song())) as reader:
-        timeline = smf.Timeline(reader.header, stream="incremental")
-        values = [v for e in reader for v in timeline.feed(e)] + timeline.finish()
-    with smf.TimedReader(BytesIO(song()), stream="reference") as reader:
-        reference = list(reader)
+    with file_io.Reader(BytesIO(song())) as reader:
+        merged = reader.merged()
+        timeline = smf.Timeline(merged.header, stream="incremental")
+        values = [v for e in merged for v in timeline.feed(e)] + timeline.finish()
+    with file_io.Reader(BytesIO(song())) as reader:
+        reference = list(reader.timed(stream="reference"))
+        assert reader.complete and reader.problem is None
     assert values == reference
     assert timeline.origin.clock == timeline.clock
     for a, b in zip(values, reference, strict=True):
@@ -140,6 +138,59 @@ def test_incremental_clip_timeline_acquires_clock_and_preserves_leading_time() -
     assert timeline.finish() == []
 
 
+@pytest.mark.parametrize("mode", ["records", "merged", "timed"])
+def test_reader_allows_only_one_consumption_mode(mode: str) -> None:
+    with file_io.Reader(BytesIO(song())) as reader:
+        if mode == "records":
+            next(reader)
+        elif mode == "merged":
+            reader.merged()
+        else:
+            reader.timed(stream="song")
+        with pytest.raises(ValueError, match="before iteration"):
+            reader.merged()
+        with pytest.raises(ValueError, match="before iteration"):
+            reader.timed(stream="song")
+        if mode != "records":
+            with pytest.raises(ValueError, match="selected view"):
+                next(reader)
+
+
+def test_merged_uses_open_stream_and_respects_its_start_offset(tmp_path: Path) -> None:
+    path = tmp_path / "song.mid"
+    path.write_bytes(song())
+    with file_io.Reader(path) as reader:
+        path.rename(tmp_path / "moved.mid")
+        assert len(list(reader.merged())) == 6
+        assert reader.complete
+    source = BytesIO(b"prefix" + song())
+    source.seek(6)
+    with file_io.Reader(source) as reader:
+        assert len(list(reader.merged())) == 6
+    assert not source.closed
+
+
+def test_performance_modes_reject_unsupported_inputs_and_options() -> None:
+    with file_io.Reader(BytesIO(b"\xf0\x7d\xf7")) as reader:
+        with pytest.raises(OSError, match="Standard MIDI File"):
+            reader.merged()
+    with file_io.Reader(BytesIO(b"\xf0\x7d\xf7")) as reader:
+        with pytest.raises(OSError, match="Standard MIDI File or MIDI Clip"):
+            reader.timed(stream="song")
+    with file_io.Reader(BytesIO(song())) as reader:
+        with pytest.raises(OSError, match="only to Clip"):
+            reader.timed(stream="song", include_configuration=True)
+
+    class Nonseekable(BytesIO):
+        def seek(self, offset: int, whence: int = 0) -> int:
+            raise OSError("not seekable")
+
+    with file_io.Reader(Nonseekable(song())) as reader:
+        with pytest.raises(OSError, match="not seekable"):
+            reader.merged()
+    assert len(list(file_io.Reader(Nonseekable(song())))) == 7
+
+
 def test_raw_ump_word_counts_and_standalone_meta_validation() -> None:
     assert [
         ump.word_count(n) for n in (0x20903C64, 0x40903C00, 0xB0000000, 0xF0000000)
@@ -159,7 +210,7 @@ def test_raw_ump_word_counts_and_standalone_meta_validation() -> None:
 
 
 def test_merged_tempo_map_is_exact_and_keeps_leading_silence() -> None:
-    reader = smf.TimedReader(BytesIO(song()), stream="song")
+    reader = file_io.Reader(BytesIO(song())).timed(stream="song")
     origin = reader.origin
     values = list(reader)
     assert len(values) == 2 and all(isinstance(v, messages.Message) for v in values)
@@ -170,7 +221,7 @@ def test_merged_tempo_map_is_exact_and_keeps_leading_silence() -> None:
     assert isinstance(second, messages.Message) and second.timestamp is not None
     assert second.timestamp.seconds == events.Rational(numerator=3, denominator=8)
     assert events.PlaybackPlan(origin=origin).deadline(first).delay_ns == 250_000_000
-    merged = list(smf.MergedReader(BytesIO(song())))
+    merged = list(file_io.Reader(BytesIO(song())).merged())
     assert [(v.tick, v.track) for v in merged] == [
         (0, 0),
         (240, 0),
@@ -180,15 +231,15 @@ def test_merged_tempo_map_is_exact_and_keeps_leading_silence() -> None:
         (480, 1),
     ]
     with pytest.raises(OSError, match="track merge limit"):
-        smf.MergedReader(BytesIO(song()), track_limit=1)
-    assert smf.TimedReader(BytesIO(song()), stream="song").clock != reader.clock
+        file_io.Reader(BytesIO(song())).merged(track_limit=1)
+    assert file_io.Reader(BytesIO(song())).timed(stream="song").clock != reader.clock
 
 
 def test_independent_sequences_and_smpte_export_have_explicit_loss_reports() -> None:
     data = song(format=2, division=0xE328)
     with pytest.raises(OSError, match="sequence"):
-        smf.TimedReader(BytesIO(data), stream="s")
-    reader = smf.TimedReader(BytesIO(data), stream="s", sequence=1)
+        file_io.Reader(BytesIO(data)).timed(stream="s")
+    reader = file_io.Reader(BytesIO(data)).timed(stream="s", sequence=1)
     values = list(reader)
     value = values[0]
     assert isinstance(value, messages.Message)
@@ -224,6 +275,7 @@ def test_clip_timed_reader_omits_file_markers_and_preserves_tempo() -> None:
     for value in [
         ump.DeltaClockstamp(ticks=0),
         ump.DeltaClockstampTicksPerQuarter(ticks=480),
+        ump.tempo(group=1, bpm=100.0),
         ump.DeltaClockstamp(ticks=0),
         ump.start_of_clip(),
         ump.tempo(group=1, bpm=120.0),
@@ -242,14 +294,38 @@ def test_clip_timed_reader_omits_file_markers_and_preserves_tempo() -> None:
     ]:
         writer.write(value)
     writer.finish()
-    with clip.TimedReader(BytesIO(stream.getvalue()), stream="clip") as reader:
-        origin = reader.origin
-        values = list(reader)
+    with file_io.Reader(BytesIO(stream.getvalue())) as reader:
+        assert all(isinstance(v, clip.Entry) for v in reader)
+    with file_io.Reader(BytesIO(stream.getvalue())) as reader:
+        timed = reader.timed(stream="clip")
+        origin = timed.origin
+        values = list(timed)
     assert len(values) == 2 and all(isinstance(v, messages.Message) for v in values)
     note = values[1]
     assert isinstance(note, messages.Message) and note.timestamp is not None
     assert note.timestamp.seconds == events.Rational(numerator=1, denominator=2)
     assert events.PlaybackPlan(origin=origin).deadline(note).delay_ns == 500_000_000
+    with file_io.Reader(BytesIO(stream.getvalue())) as reader:
+        configured = list(reader.timed(stream="clip", include_configuration=True))
+    assert len(configured) > len(values)
+    with file_io.Reader(BytesIO(stream.getvalue())) as reader:
+        with pytest.raises(OSError, match="sequence applies only"):
+            reader.timed(stream="clip", sequence=0)
+
+
+def test_timed_failure_is_reported_by_the_owning_reader() -> None:
+    source = BytesIO()
+    writer = smf.Writer(source, header=smf.Header(format=0, tracks=1, division=480))
+    writer.write(smf.Event(track=0, tick=0, record=smf.Meta(kind=33, data=b"\x01")))
+    writer.write(smf.Event(track=0, tick=0, record=smf.Meta(kind=47, data=b"")))
+    writer.finish()
+    with file_io.Reader(BytesIO(source.getvalue())) as reader:
+        timed = reader.timed(stream="song")
+        with pytest.raises(OSError, match="nonzero SMF port"):
+            next(timed)
+        assert not reader.complete and reader.problem
+        assert list(timed) == []
+        assert not reader.complete
 
 
 def test_split_sysex_is_assembled_per_track_when_other_tracks_interleave() -> None:
@@ -270,7 +346,7 @@ def test_split_sysex_is_assembled_per_track_when_other_tracks_interleave() -> No
     ]:
         writer.write(record)
     writer.finish()
-    values = list(smf.TimedReader(BytesIO(stream.getvalue()), stream="s"))
+    values = list(file_io.Reader(BytesIO(stream.getvalue())).timed(stream="s"))
     assert len(values) == 2
     assert [v for v in values if isinstance(v, messages.Message)] == [
         messages.NoteOn(channel=1, note=60, velocity=1),

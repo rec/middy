@@ -577,14 +577,15 @@ preserves the requirement that host time never moves backwards.
 
 Use a timeline when records come from your own parsing or editing workflow.
 `md.smf.Timeline` accepts events in merged tick order, applying tempo changes exactly.
-For ordinary playback from a file, `md.smf.TimedReader` performs both steps for you.
+For ordinary playback from a file, `reader.timed()` performs both steps for you.
 
 ```python
 import middy as md
 
-with md.smf.MergedReader('performance.mid') as reader:
-    timeline = md.smf.Timeline(reader.header, stream='performance')
-    for event in reader:
+with md.Reader('performance.mid') as reader:
+    merged = reader.merged()
+    timeline = md.smf.Timeline(merged.header, stream='performance')
+    for event in merged:
         for message in timeline.feed(event):
             print(message)
     print(timeline.finish())
@@ -596,10 +597,10 @@ For playback directly from a file:
 import middy as md
 
 with (
-    md.smf.TimedReader('performance.mid', stream='performance') as reader,
+    md.Reader('performance.mid') as reader,
     md.Output() as output,
 ):
-    output.send(reader)
+    output.send(reader.timed(stream='performance'))
 ```
 
 For a UMP Clip file, use the corresponding entry converter:
@@ -620,10 +621,10 @@ For playback directly from a Clip file:
 import middy as md
 
 with (
-    md.clip.TimedReader('performance.clip', stream='performance') as reader,
+    md.Reader('performance.clip') as reader,
     md.Output() as output,
 ):
-    output.send(reader)
+    output.send(reader.timed(stream='performance'))
 ```
 
 Both timeline classes expose `clock` and `origin`. Clip returns `None` until the

@@ -9,7 +9,7 @@ from os import PathLike
 from types import TracebackType
 from typing import BinaryIO, Literal
 
-from . import archive, events, messages, smf
+from . import archive, clip, events, messages, smf
 
 def write(
     records: Iterable[
@@ -28,6 +28,10 @@ def write(
 ) -> None: ...
 
 class Reader:
+    """Own one cursor; choose ordinary, merged or timed iteration before reading.
+
+    Closing Reader invalidates its views. Borrowed streams remain open.
+    """
     def __init__(
         self,
         source: str | PathLike[str] | BinaryIO,
@@ -48,6 +52,7 @@ class Reader:
         | archive.Opaque
         | smf.Header
         | smf.Event
+        | clip.Entry
     ]: ...
     def __next__(
         self,
@@ -61,7 +66,24 @@ class Reader:
         | archive.Opaque
         | smf.Header
         | smf.Event
+        | clip.Entry
     ): ...
+    def merged(
+        self,
+        *,
+        sequence: int | None = None,
+        track_limit: int = 128,
+        buffer_limit: int | str = 8_388_608,
+    ) -> MergedEvents: ...
+    def timed(
+        self,
+        *,
+        stream: str,
+        sequence: int | None = None,
+        track_limit: int = 128,
+        buffer_limit: int | str = 8_388_608,
+        include_configuration: bool = False,
+    ) -> TimedMessages: ...
     def __enter__(self) -> Reader: ...
     def __exit__(
         self,
@@ -74,6 +96,22 @@ class Reader:
     def complete(self) -> bool: ...
     @property
     def problem(self) -> str | None: ...
+
+class MergedEvents:
+    @property
+    def header(self) -> smf.Header: ...
+    def __iter__(self) -> Iterator[smf.Event]: ...
+    def __next__(self) -> smf.Event: ...
+
+class TimedMessages:
+    @property
+    def header(self) -> smf.Header | None: ...
+    @property
+    def clock(self) -> events.Clock: ...
+    @property
+    def origin(self) -> events.Timestamp: ...
+    def __iter__(self) -> Iterator[messages.Message | events.StreamDiagnostic]: ...
+    def __next__(self) -> messages.Message | events.StreamDiagnostic: ...
 
 class Writer:
     def __init__(

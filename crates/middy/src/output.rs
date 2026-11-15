@@ -113,7 +113,25 @@ impl OutputItem for io::Result<crate::file_io::Record> {
             crate::file_io::Record::Archive(record) => Ok(OutputValue::Record(record)),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "use smf::TimedReader for MIDI-file playback",
+                "use Reader::timed for MIDI-file playback",
+            )),
+        }
+    }
+}
+impl OutputItem for io::Result<crate::live::Item> {
+    fn output_item(self) -> io::Result<OutputValue> {
+        match self? {
+            crate::live::Item::Message(message) => Ok(OutputValue::Message(*message)),
+            crate::live::Item::Diagnostic(diagnostic) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{}: {:?} at packet {} (lost {}): {}",
+                    diagnostic.stream,
+                    diagnostic.kind,
+                    diagnostic.packet,
+                    diagnostic.lost,
+                    diagnostic.reason
+                ),
             )),
         }
     }
@@ -1101,6 +1119,34 @@ mod tests {
     }
     fn bytes(values: &[&[u8]]) -> Vec<Packet> {
         values.iter().map(|v| Packet::Bytes(v.to_vec())).collect()
+    }
+
+    #[test]
+    fn timed_reader_schedules_messages_directly() {
+        let data = b"MThd\0\0\0\x06\0\0\0\x01\x01\xe0MTrk\0\0\0\x13\0\xff\x51\x03\x07\xa1\x20\0\x90\x3c\x64\x83\x60\x3c\0\0\xff\x2f\0";
+        let timed = crate::file_io::Reader::new(std::io::Cursor::new(data), 1024, false, false)
+            .unwrap()
+            .timed("song".into(), None, 128, 8192, false)
+            .unwrap();
+        let mut fixture = Fixture::new();
+        let report = fixture.output.send(timed).unwrap();
+        assert_eq!(report.sent_events, 2);
+        assert_eq!(*fixture.deadlines.borrow(), [0, 500_000_000]);
+        assert_eq!(fixture.packets().len(), 2);
+    }
+
+    #[test]
+    fn timed_reader_diagnostic_stops_playback() {
+        let data = b"MThd\0\0\0\x06\0\0\0\x01\x01\xe0MTrk\0\0\0\x08\0\xf0\x01\x7d\0\xff\x2f\0";
+        let timed = crate::file_io::Reader::new(std::io::Cursor::new(data), 1024, false, false)
+            .unwrap()
+            .timed("song".into(), None, 128, 8192, false)
+            .unwrap();
+        let mut fixture = Fixture::new();
+        let failure = fixture.output.send(timed).unwrap_err();
+        assert!(matches!(failure.cause, crate::playback::Cause::Input(_)));
+        assert_eq!(failure.report.sent_events, 0);
+        assert!(fixture.packets().is_empty());
     }
 
     #[test]

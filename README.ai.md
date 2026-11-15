@@ -99,22 +99,28 @@ records = list(reader)  # Completion and every record CRC are checked.
 assert reader.complete
 reader.close()
 
-score = smf.TimedReader("song.mid", stream="score")
-origin = score.origin  # Explicit zero preserves any leading silence.
+score = file_io.Reader("song.mid")
+timed = score.timed(stream="score")
+origin = timed.origin  # Explicit zero preserves any leading silence.
 # With an opened Output:
-# output.send(score, origin=origin)
+# output.send(timed, origin=origin)
 score.close()
 ```
 
 SMF supports types 0/1/2, PPQN and SMPTE timing. `smf.Reader` retains metadata,
-unknown chunks and F0/F7 file records. `smf.MergedReader` merges tracks with a
+unknown chunks and F0/F7 file records. `Reader.merged()` merges tracks with a
 bounded lookahead and deterministic tick/track order; Type 2 requires an explicit
-`sequence`. `smf.TimedReader` is a performance view with exact tempo conversion,
+`sequence`. `Reader.timed()` is an SMF/Clip performance view with exact tempo conversion,
 not a metadata-preserving replacement for `Reader`. `smf.export_event` reports
 unsupported content and quantization; loss and UMP group routing require explicit
 decisions. `sysex` handles concatenated SysEx dumps; `clip` handles MIDI Clip 1.0.
 File writers require `finish()`. Readers have `close()`; borrowed streams remain
 open. No codec starts MIDI workers. See [Python examples](doc/examples.md).
+
+Choose ordinary iteration, `merged()` or `timed()` before iteration starts.
+Python views share the owning Reader; closing it invalidates its views. Rust
+methods consume Reader and transfer the stream to the returned iterator. Merged
+SMF input must be seekable. Ordinary Clip input yields `clip.Entry` values.
 
 The [archive v2 layout](doc/archive-format.md) documents exact
 clock/record encoding and verified-prefix recovery. Unknown content requires

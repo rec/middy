@@ -7,9 +7,152 @@ use std::path::PathBuf;
 
 #[pyclass(module = "middy.file_io")]
 struct Reader {
-    value: Option<model::Reader<Stream>>,
+    value: Option<ReaderState>,
     complete: bool,
     problem: Option<String>,
+    started: bool,
+}
+enum ReaderState {
+    Records(Box<model::Reader<Stream>>),
+    Merged(Box<model::MergedEvents<Stream>>),
+    Timed(Box<model::TimedMessages<Stream>>),
+}
+impl Reader {
+    fn next_item(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.value.as_ref().ok_or_else(closed)?;
+        self.started = true;
+        let result = (|| match self.value.as_mut().ok_or_else(closed)? {
+            ReaderState::Records(reader) => {
+                let result = py.detach(|| reader.next().transpose());
+                self.complete = reader.complete();
+                self.problem = reader.problem().map(str::to_owned);
+                result
+                    .map_err(os_error)?
+                    .map(|record| match record {
+                        model::Record::Archive(record) => crate::archive::to_python(py, record),
+                        model::Record::Header(value) => {
+                            Ok(Py::new(py, crate::files::Header { value })?.into_any())
+                        }
+                        model::Record::Event(value) => {
+                            Ok(Py::new(py, crate::files::Event { value })?.into_any())
+                        }
+                        model::Record::Clip(value) => {
+                            Ok(Py::new(py, crate::files::ClipEntry { value })?.into_any())
+                        }
+                    })
+                    .transpose()
+            }
+            ReaderState::Merged(reader) => py
+                .detach(|| reader.next().transpose())
+                .map_err(os_error)?
+                .map(|value| Ok(Py::new(py, crate::files::Event { value })?.into_any()))
+                .transpose(),
+            ReaderState::Timed(reader) => py
+                .detach(|| reader.next().transpose())
+                .map_err(os_error)?
+                .map(|value| crate::live::item(py, value))
+                .transpose(),
+        })();
+        match &result {
+            Err(error) => {
+                self.problem = Some(error.to_string());
+                self.complete = false;
+            }
+            Ok(None) if !matches!(self.value, Some(ReaderState::Records(_))) => {
+                self.complete = self.problem.is_none();
+            }
+            _ => {}
+        }
+        result
+    }
+    fn select(&mut self) -> PyResult<model::Reader<Stream>> {
+        self.value.as_ref().ok_or_else(closed)?;
+        if self.started || !matches!(self.value, Some(ReaderState::Records(_))) {
+            return Err(PyValueError::new_err(
+                "select a reading mode before iteration starts; a mode is already selected",
+            ));
+        }
+        let Some(ReaderState::Records(reader)) = self.value.take() else {
+            unreachable!()
+        };
+        Ok(*reader)
+    }
+}
+
+#[pyclass(module = "middy.file_io")]
+struct MergedEvents {
+    owner: Py<Reader>,
+}
+#[pymethods]
+impl MergedEvents {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.owner.borrow_mut(py).next_item(py)
+    }
+    #[getter]
+    fn header(&self, py: Python<'_>) -> PyResult<crate::files::Header> {
+        let owner = self.owner.borrow(py);
+        let Some(ReaderState::Merged(reader)) = &owner.value else {
+            return Err(closed());
+        };
+        Ok(crate::files::Header {
+            value: reader.header().clone(),
+        })
+    }
+}
+
+#[pyclass(module = "middy.file_io")]
+struct TimedMessages {
+    owner: Py<Reader>,
+}
+#[pymethods]
+impl TimedMessages {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+    fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.owner.borrow_mut(py).next_item(py)
+    }
+    #[getter]
+    fn header(&self, py: Python<'_>) -> PyResult<Option<crate::files::Header>> {
+        let owner = self.owner.borrow(py);
+        let Some(ReaderState::Timed(reader)) = &owner.value else {
+            return Err(closed());
+        };
+        Ok(reader
+            .header()
+            .cloned()
+            .map(|value| crate::files::Header { value }))
+    }
+    #[getter]
+    fn clock(&self, py: Python<'_>) -> PyResult<crate::packets::Clock> {
+        let owner = self.owner.borrow(py);
+        let Some(ReaderState::Timed(reader)) = &owner.value else {
+            return Err(closed());
+        };
+        Ok(crate::packets::Clock {
+            value: reader.clock().clone(),
+        })
+    }
+    #[getter]
+    fn origin(&self, py: Python<'_>) -> PyResult<crate::event_values::Timestamp> {
+        let owner = self.owner.borrow(py);
+        let Some(ReaderState::Timed(reader)) = &owner.value else {
+            return Err(closed());
+        };
+        Ok(crate::event_values::Timestamp {
+            value: reader.origin(),
+        })
+    }
+}
+fn sequence_index(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<u16>> {
+    value
+        .map(crate::files::uint)
+        .transpose()?
+        .map(|v| u16::try_from(v).map_err(|_| PyValueError::new_err("sequence exceeds u16")))
+        .transpose()
 }
 #[pymethods]
 impl Reader {
@@ -22,7 +165,7 @@ impl Reader {
         #[pyo3(from_py_with=crate::ump::boolean)] preserve_unknown: bool,
     ) -> PyResult<Self> {
         Ok(Self {
-            value: Some(
+            value: Some(ReaderState::Records(Box::new(
                 model::Reader::new(
                     Stream::input(source)?,
                     payload_limit,
@@ -30,31 +173,72 @@ impl Reader {
                     preserve_unknown,
                 )
                 .map_err(os_error)?,
-            ),
+            ))),
             complete: false,
             problem: None,
+            started: false,
         })
     }
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
-        slf
+    fn __iter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        slf.value.as_ref().ok_or_else(closed)?;
+        if !matches!(slf.value, Some(ReaderState::Records(_))) {
+            return Err(PyValueError::new_err(
+                "iterate the selected view instead of Reader",
+            ));
+        }
+        Ok(slf)
     }
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let reader = self.value.as_mut().ok_or_else(closed)?;
-        let result = py.detach(|| reader.next().transpose());
-        self.complete = reader.complete();
-        self.problem = reader.problem().map(str::to_owned);
-        result
-            .map_err(os_error)?
-            .map(|record| match record {
-                model::Record::Archive(record) => crate::archive::to_python(py, record),
-                model::Record::Header(value) => {
-                    Ok(Py::new(py, crate::files::Header { value })?.into_any())
-                }
-                model::Record::Event(value) => {
-                    Ok(Py::new(py, crate::files::Event { value })?.into_any())
-                }
+        self.value.as_ref().ok_or_else(closed)?;
+        if !matches!(self.value, Some(ReaderState::Records(_))) {
+            return Err(PyValueError::new_err(
+                "iterate the selected view instead of Reader",
+            ));
+        }
+        self.next_item(py)
+    }
+    #[pyo3(signature=(*,sequence=None,track_limit=128,buffer_limit=8_388_608))]
+    fn merged(
+        mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        sequence: Option<&Bound<'_, PyAny>>,
+        #[pyo3(from_py_with=crate::files::limit)] track_limit: usize,
+        #[pyo3(from_py_with=crate::units::bytes)] buffer_limit: usize,
+    ) -> PyResult<MergedEvents> {
+        let sequence = sequence_index(sequence)?;
+        let reader = slf.select()?;
+        slf.value = Some(ReaderState::Merged(Box::new(
+            py.detach(|| reader.merged(sequence, track_limit, buffer_limit))
+                .map_err(os_error)?,
+        )));
+        Ok(MergedEvents { owner: slf.into() })
+    }
+    #[pyo3(signature=(*,stream,sequence=None,track_limit=128,buffer_limit=8_388_608,include_configuration=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn timed(
+        mut slf: PyRefMut<'_, Self>,
+        py: Python<'_>,
+        stream: String,
+        sequence: Option<&Bound<'_, PyAny>>,
+        #[pyo3(from_py_with=crate::files::limit)] track_limit: usize,
+        #[pyo3(from_py_with=crate::units::bytes)] buffer_limit: usize,
+        #[pyo3(from_py_with=crate::ump::boolean)] include_configuration: bool,
+    ) -> PyResult<TimedMessages> {
+        let sequence = sequence_index(sequence)?;
+        let reader = slf.select()?;
+        slf.value = Some(ReaderState::Timed(Box::new(
+            py.detach(|| {
+                reader.timed(
+                    stream,
+                    sequence,
+                    track_limit,
+                    buffer_limit,
+                    include_configuration,
+                )
             })
-            .transpose()
+            .map_err(os_error)?,
+        )));
+        Ok(TimedMessages { owner: slf.into() })
     }
     fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
         slf.value.as_ref().ok_or_else(closed)?;
@@ -207,6 +391,8 @@ impl Writer {
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Reader>()?;
+    module.add_class::<MergedEvents>()?;
+    module.add_class::<TimedMessages>()?;
     module.add_class::<Writer>()?;
     module.add_function(wrap_pyfunction!(write, module)?)
 }
