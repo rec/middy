@@ -121,6 +121,7 @@ __all__: list[str] = [
     "mpe",
     "notes",
     "routing",
+    "set_scan_interval",
     "smf",
     "sysex",
     "testing",
@@ -242,6 +243,7 @@ from .midi import (
     UmpPacket,
     WorkerError,
     WorkerTimeoutError,
+    set_scan_interval,
 )
 from .mpe import ZoneConfiguration
 from .routing import Route, Router

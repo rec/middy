@@ -10,6 +10,8 @@ from ._resource import ResourceModel
 
 __version__: str
 
+def set_scan_interval(interval: float | str) -> None: ...
+
 class Encoding:
     Bytes: ClassVar[Encoding]
     Ump: ClassVar[Encoding]

@@ -61,7 +61,11 @@ collection such as `["Synth *", "Pad[12]"]`. Rust accepts the same selectors via
 `with_port`. Matching is the union of case-sensitive name substrings and shell
 patterns, with overlapping matches opened once. Omitting `port` selects the first
 output. Inputs and selected outputs share one process-wide device scanner, polling
-every 100 ms. Each active backend/direction/worker configuration is enumerated once
+every 100 ms by default. `set_scan_interval` changes the process-wide interval for
+existing and future clients: Python accepts seconds or a unit string such as
+`md.set_scan_interval("250 ms")`; Rust uses
+`middy::set_scan_interval(Duration::from_millis(250))?`. The interval must be
+positive. Each active backend/direction/worker configuration is enumerated once
 per cycle, regardless of client count. Outputs use its cached topology when
 sending; new devices receive subsequent messages without replay. `connect(snapshot)`
 still selects one discovered device. Empty or currently unmatched selections can
@@ -165,7 +169,7 @@ only the new message. Plain Python messages retain no metadata allocation.
 Rust `Metadata.stream` uses `Option<Arc<str>>`; `Message::stream()` still returns
 `Option<&str>`, and `with_stream` continues accepting strings.
 By default, `Input()` listens to all visible inputs of the selected backend and
-encoding, checking every 100 ms for newly connected or removed ports. It opens
+encoding, checking every 100 ms by default for newly connected or removed ports. It opens
 even with no devices present. A port pattern follows all matching inputs;
 an explicit discovery snapshot selects one device. Each connection has its own
 decoder, stream and clock.

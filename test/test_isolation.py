@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from middy import events, messages, midi, mpe
+from middy import events, messages, midi, mpe, set_scan_interval
 from middy._clients import Input, Output
 from middy._native import CallbackBridge
 from middy._transport import ReceiveQueue
@@ -777,7 +777,7 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
         if not callback:
             assert source.receive(timeout=0) is None
         recorder = None if raw else source.start()
-        topology.write_text("Keyboard\nKeyboard\n")
+        write_ports(topology, "Keyboard\nKeyboard\n")
         first = receive()
         second = receive()
         assert isinstance(first, (messages.Message, events.ReceivedPacket))
@@ -792,10 +792,10 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
         else:
             assert isinstance(second, events.ReceivedPacket)
             assert first.clock != second.clock
-        topology.write_text("")
+        write_ports(topology, "")
         assert isinstance(receive(), events.StreamDiagnostic)
         assert isinstance(receive(), events.StreamDiagnostic)
-        topology.write_text("Keyboard\n")
+        write_ports(topology, "Keyboard\n")
         reconnected = receive()
         if isinstance(first, messages.Message):
             assert isinstance(reconnected, messages.Message)
@@ -834,10 +834,14 @@ def output_topology(
     return topology, log
 
 
-def change_outputs(topology: Path, log: Path, names: str) -> None:
+def write_ports(topology: Path, names: str) -> None:
     pending = topology.with_suffix(".pending")
     pending.write_text(names)
     pending.replace(topology)
+
+
+def change_outputs(topology: Path, log: Path, names: str) -> None:
+    write_ports(topology, names)
     expected = names.replace("\n", "|")
     deadline = monotonic() + 3
     while (
@@ -930,6 +934,44 @@ def test_output_broadcast_follows_new_matches_and_cleans_only_what_each_port_rec
     assert all(n != "Other" for n, _ in packets)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [0, -1, "0 ms", "-1 ms", float("nan"), float("inf"), True, "0.1 ns", "1e20 s"],
+)
+def test_scan_interval_rejects_invalid_durations(value: float | str) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        set_scan_interval(value)
+
+
+def test_scan_interval_changes_existing_and_future_inputs_and_outputs(
+    output_topology: tuple[Path, Path],
+) -> None:
+    _, log = output_topology
+    scans = log.with_suffix(".scans")
+    set_scan_interval("30 s")
+    try:
+        with (
+            midi.Input(port=[], run_in_subprocess=True),
+            midi.Output(port="Synth A", run_in_subprocess=True),
+        ):
+            before = scans.read_text()
+            with pytest.raises(ValueError):
+                set_scan_interval(0)
+            sleep(0.2)
+            assert scans.read_text() == before
+            set_scan_interval(0.02)
+            deadline = monotonic() + 3
+            while len(scans.read_text().splitlines()) < len(before.splitlines()) + 6:
+                assert monotonic() < deadline, (
+                    "interval update did not wake the scanner"
+                )
+                sleep(0.005)
+            counts = Counter(s.split("\t")[1] for s in scans.read_text().splitlines())
+            assert counts["true"] >= 4 and counts["false"] >= 4
+    finally:
+        set_scan_interval("100 ms")
+
+
 def test_shared_scan_failure_reaches_each_output_subscriber(
     output_topology: tuple[Path, Path],
 ) -> None:
@@ -937,9 +979,7 @@ def test_shared_scan_failure_reaches_each_output_subscriber(
     outputs = [
         midi.Output(port="Synth A", run_in_subprocess=True).connect() for _ in range(2)
     ]
-    pending = topology.with_suffix(".pending")
-    pending.write_text("!fail!\n")
-    pending.replace(topology)
+    write_ports(topology, "!fail!\n")
     deadline = monotonic() + 3
     with pytest.raises(midi.ConnectError, match="device enumeration failed"):
         while monotonic() < deadline:
@@ -1073,7 +1113,7 @@ def test_port_collection_follows_only_matching_devices_and_opens_overlaps_once(
                 if isinstance(m, messages.Message) and m.port is not None
             } == {"Keyboard A", "Keyboard B", "Pad1"}
         assert receive(0.2) is None
-        topology.write_text(names + "Unselected new device\nFuture1\n")
+        write_ports(topology, names + "Unselected new device\nFuture1\n")
         added = receive()
         if raw:
             assert isinstance(added, events.ReceivedPacket)
@@ -1096,7 +1136,7 @@ def test_string_and_singleton_collection_follow_all_current_and_future_matches(
     monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
     with midi.Input(port=port, run_in_subprocess=True) as source:
         assert source.receive(timeout=0.2) is None
-        topology.write_text("Pad\nKeyboard A\nKeyboard B\n")
+        write_ports(topology, "Pad\nKeyboard A\nKeyboard B\n")
         received = [source.receive(timeout=3) for _ in range(2)]
         assert {
             m.port.name
@@ -1115,7 +1155,7 @@ def test_empty_port_collection_stays_empty_when_devices_appear(
     monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
     with midi.Input(port=[], run_in_subprocess=True) as source:
         assert source.receive(timeout=0.2) is None
-        topology.write_text("Keyboard\nPad\n")
+        write_ports(topology, "Keyboard\nPad\n")
         assert source.receive(timeout=0.2) is None
 
 

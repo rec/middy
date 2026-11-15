@@ -933,7 +933,8 @@ mod tests {
             let configure: PyResult<()> = client.with_available(|_| panic!("must not configure"));
             let connect = client.connect(&connection, |_| panic!("must not open"));
             let virtual_open = resource.connect(|_| panic!("must not open"));
-            for error in [discovery, configure, connect, virtual_open] {
+            let scan_interval = crate::ports::set_scan_interval(py, 100_000_000);
+            for error in [discovery, configure, connect, virtual_open, scan_interval] {
                 let error = error.unwrap_err();
                 assert!(error.is_instance_of::<PyRuntimeError>(py));
                 assert!(error.value(py).to_string().contains("controlling thread"));

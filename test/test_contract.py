@@ -111,7 +111,11 @@ def test_root_exports_public_modules_curated_classes_and_functions() -> None:
     assert {n for n in vars(md) if not n.startswith("_")} == set(md.__all__)
     for n in set(md.__all__) - modules:
         value = getattr(md, n)
-        assert isinstance(value, type) or n in {"dump_sysex", "write"}
+        assert isinstance(value, type) or n in {
+            "dump_sysex",
+            "set_scan_interval",
+            "write",
+        }
         assert getattr(import_module(value.__module__), value.__name__) is value
     assert md.Input is md.midi.Input
     assert md.Output is md.midi.Output
@@ -120,6 +124,7 @@ def test_root_exports_public_modules_curated_classes_and_functions() -> None:
     assert md.Writer is md.file_io.Writer
     assert md.write is md.file_io.write
     assert md.dump_sysex is md.sysex.dump_sysex
+    assert md.set_scan_interval is md.midi.set_scan_interval
     assert not hasattr(md, "dump") and not hasattr(md.sysex, "dump")
     assert md.Route is md.routing.Route
     assert md.ParameterStep is md.messages.ParameterStep

@@ -4,7 +4,42 @@ use std::sync::{atomic::AtomicBool, mpsc, Condvar, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const INTERVAL: Duration = Duration::from_millis(100);
+const DEFAULT_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Set the process-wide device polling interval (default: 100 ms).
+/// Applies to existing and future followers; schedules the next scan one interval
+/// after this call. The interval must be positive and fit in u64 nanoseconds.
+pub fn set_scan_interval(interval: Duration) -> Result<()> {
+    ensure_control_thread()?;
+    if interval.is_zero() {
+        return Err(Error::Invalid("scan interval must be positive".into()));
+    }
+    if interval.as_nanos() > u128::from(u64::MAX) {
+        return Err(Error::Invalid("scan interval is out of range".into()));
+    }
+    let (reply, response) = mpsc::sync_channel(1);
+    sender()?
+        .send(Request::Interval { interval, reply })
+        .map_err(|_| Error::Worker("device scanner stopped".into()))?;
+    response
+        .recv()
+        .map_err(|_| Error::Worker("device scanner stopped".into()))?
+}
+
+fn sender() -> Result<&'static mpsc::Sender<Request>> {
+    static SCANNER: OnceLock<Result<mpsc::Sender<Request>>> = OnceLock::new();
+    SCANNER
+        .get_or_init(|| {
+            let (sender, receiver) = mpsc::channel();
+            thread::Builder::new()
+                .name("middy-device-scanner".into())
+                .spawn(move || run(receiver))
+                .map_err(|e| Error::Worker(e.to_string()))?;
+            Ok(sender)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
 
 #[derive(Clone, PartialEq, Eq)]
 struct Key {
@@ -32,21 +67,9 @@ impl Subscription {
         subprocess: Option<SubprocessOptions>,
     ) -> Result<Self> {
         ensure_control_thread()?;
-        static SCANNER: OnceLock<Result<mpsc::Sender<Request>>> = OnceLock::new();
-        let scanner = SCANNER
-            .get_or_init(|| {
-                let (sender, receiver) = mpsc::channel();
-                thread::Builder::new()
-                    .name("middy-device-scanner".into())
-                    .spawn(move || run(receiver))
-                    .map_err(|e| Error::Worker(e.to_string()))?;
-                Ok(sender)
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
         let (reply, response) = mpsc::sync_channel(1);
-        scanner
-            .send(Request {
+        sender()?
+            .send(Request::Subscribe {
                 key: Key {
                     backend,
                     input,
@@ -72,7 +95,8 @@ impl Subscription {
             drop(
                 self.0
                     .changed
-                    .wait_timeout(state, INTERVAL)
+                    // Keep health checks responsive even with slow device polling.
+                    .wait_timeout(state, Duration::from_millis(100))
                     .unwrap_or_else(|p| p.into_inner()),
             );
         }
@@ -83,9 +107,15 @@ impl Subscription {
         self.0.changed.notify_all();
     }
 }
-struct Request {
-    key: Key,
-    reply: mpsc::SyncSender<Result<Subscription>>,
+enum Request {
+    Subscribe {
+        key: Key,
+        reply: mpsc::SyncSender<Result<Subscription>>,
+    },
+    Interval {
+        interval: Duration,
+        reply: mpsc::SyncSender<Result<()>>,
+    },
 }
 enum Client {
     Input(Input),
@@ -188,14 +218,15 @@ impl Drop for Entry {
 }
 fn run(receiver: mpsc::Receiver<Request>) {
     let mut entries: Vec<Entry> = Vec::new();
-    let mut next = Instant::now() + INTERVAL;
+    let mut interval = DEFAULT_INTERVAL;
+    let mut next = Instant::now() + interval;
     loop {
         entries.retain(|e| e.catalog.strong_count() != 0);
         if Instant::now() >= next {
             for entry in &mut entries {
                 entry.scan();
             }
-            next = Instant::now() + INTERVAL;
+            next = Instant::now() + interval;
         }
         let request = if entries.is_empty() {
             match receiver.recv() {
@@ -209,22 +240,39 @@ fn run(receiver: mpsc::Receiver<Request>) {
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,
             }
         };
+        let (key, reply) = match request {
+            Request::Interval {
+                interval: value,
+                reply,
+            } => {
+                let result = Instant::now()
+                    .checked_add(value)
+                    .ok_or_else(|| Error::Invalid("scan interval is out of range".into()))
+                    .map(|deadline| {
+                        interval = value;
+                        next = deadline;
+                    });
+                let _ = reply.send(result);
+                continue;
+            }
+            Request::Subscribe { key, reply } => (key, reply),
+        };
         let existing = entries
             .iter()
-            .find(|e| e.key == request.key)
+            .find(|e| e.key == key)
             .and_then(|e| e.catalog.upgrade());
         let first = entries.is_empty();
         let result = if let Some(catalog) = existing {
             Ok(Subscription(catalog))
         } else {
-            Entry::new(request.key).map(|(entry, subscription)| {
+            Entry::new(key).map(|(entry, subscription)| {
                 entries.push(entry);
                 subscription
             })
         };
-        let _ = request.reply.send(result);
+        let _ = reply.send(result);
         if first {
-            next = Instant::now() + INTERVAL;
+            next = Instant::now() + interval;
         }
     }
 }

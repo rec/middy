@@ -52,10 +52,13 @@ fn output_fixture(names: &str) -> (PathBuf, PathBuf, SubprocessOptions) {
     ]);
     (topology, log, worker)
 }
-fn change_outputs(topology: &std::path::Path, log: &std::path::Path, names: &str) {
+fn write_ports(topology: &std::path::Path, names: &str) {
     let pending = topology.with_extension("pending");
     std::fs::write(&pending, names).unwrap();
     std::fs::rename(pending, topology).unwrap();
+}
+fn change_outputs(topology: &std::path::Path, log: &std::path::Path, names: &str) {
+    write_ports(topology, names);
     let expected = names.replace('\n', "|");
     let deadline = Instant::now() + Duration::from_secs(3);
     while std::fs::read_to_string(log.with_extension("scans"))
@@ -200,6 +203,67 @@ fn selected_outputs_follow_new_matches_and_keep_independent_cleanup_state() {
     }
 }
 #[test]
+fn scan_interval_changes_existing_and_future_inputs_and_outputs() {
+    let _serial = SERIAL.lock().unwrap();
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            middy::set_scan_interval(Duration::from_millis(100)).unwrap();
+        }
+    }
+    let _reset = Reset;
+    middy::set_scan_interval(Duration::from_secs(30)).unwrap();
+    let (_, log, worker) = output_fixture("Synth\n");
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker.clone())
+        .unwrap()
+        .with_port(std::iter::empty::<&str>())
+        .unwrap();
+    assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port("Synth")
+        .unwrap();
+    output.send(middy::TimingClock::new().unwrap()).unwrap();
+    let scans = log.with_extension("scans");
+    let before = std::fs::read_to_string(&scans).unwrap();
+    for invalid in [Duration::ZERO, Duration::MAX] {
+        assert!(matches!(
+            middy::set_scan_interval(invalid),
+            Err(transport::Error::Invalid(_))
+        ));
+    }
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(std::fs::read_to_string(&scans).unwrap(), before);
+    middy::set_scan_interval(Duration::from_millis(20)).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let after = std::fs::read_to_string(&scans).unwrap();
+        if after.lines().count() >= before.lines().count() + 6 {
+            for direction in ["true", "false"] {
+                let calls = after
+                    .lines()
+                    .filter(|s| s.split('\t').nth(1) == Some(direction))
+                    .count();
+                assert!(calls >= 4, "both input and output polling must change");
+            }
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "interval update did not wake the scanner"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    input.close().unwrap();
+    output.close().unwrap();
+}
+#[test]
 fn shared_scan_failure_reaches_each_input_subscriber() {
     let _serial = SERIAL.lock().unwrap();
     let (topology, _, worker) = output_fixture("Synth\n");
@@ -215,9 +279,7 @@ fn shared_scan_failure_reaches_each_input_subscriber() {
         assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
         inputs.push(input);
     }
-    let pending = topology.with_extension("pending");
-    std::fs::write(&pending, "!fail!\n").unwrap();
-    std::fs::rename(pending, topology).unwrap();
+    write_ports(&topology, "!fail!\n");
     for input in &mut inputs {
         let error = input
             .receive(Some(Duration::from_secs(3)), None)
@@ -349,7 +411,7 @@ fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() 
         .receive(Some(Duration::from_millis(200)), None)
         .unwrap()
         .is_none());
-    std::fs::write(&path, format!("{names}Unselected new device\nFuture1\n")).unwrap();
+    write_ports(&path, &format!("{names}Unselected new device\nFuture1\n"));
     let Some(InputItem::Message(message)) =
         input.receive(Some(Duration::from_secs(3)), None).unwrap()
     else {
@@ -395,7 +457,7 @@ fn string_and_collection_selectors_follow_all_matches_even_when_initially_absent
             .receive(Some(Duration::from_millis(200)), None)
             .unwrap()
             .is_none());
-        std::fs::write(&path, "Pad\nKeyboard A\nKeyboard B\n").unwrap();
+        write_ports(&path, "Pad\nKeyboard A\nKeyboard B\n");
         let mut names = std::collections::BTreeSet::new();
         for _ in 0..2 {
             let Some(InputItem::Message(message)) =
@@ -476,7 +538,7 @@ fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings()
     let recorder = input
         .start(None::<&std::path::Path>, &Default::default())
         .unwrap();
-    std::fs::write(&path, "Keyboard\nKeyboard\n").unwrap();
+    write_ports(&path, "Keyboard\nKeyboard\n");
     let mut ports = Vec::new();
     for _ in 0..2 {
         let InputItem::Message(message) = input
@@ -492,14 +554,14 @@ fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings()
     }
     assert_ne!(ports[0].identity, ports[1].identity);
     assert!(input.last_message_time().is_some());
-    std::fs::write(&path, "").unwrap();
+    write_ports(&path, "");
     for _ in 0..2 {
         assert!(matches!(
             input.receive(Some(Duration::from_secs(3)), None).unwrap(),
             Some(InputItem::Diagnostic(_))
         ));
     }
-    std::fs::write(&path, "Keyboard\n").unwrap();
+    write_ports(&path, "Keyboard\n");
     let Some(InputItem::Message(message)) =
         input.receive(Some(Duration::from_secs(3)), None).unwrap()
     else {

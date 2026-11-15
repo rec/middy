@@ -35,7 +35,9 @@ for message in md.Input():
 
 `Input()` listens to all inputs exposed by the selected backend and encoding,
 including devices connected after opening. It can open with no devices present;
-inputs and outputs share one device scanner running every 100 ms.
+inputs and outputs share one device scanner with a default interval of 100 ms.
+`md.set_scan_interval('250 ms')` changes the interval for all existing and future
+clients; numeric values are seconds. The interval must be positive.
 `Input(port='Keyboard')` follows all ports matching
 that name substring or shell pattern, just like `Input(port=['Keyboard'])`.
 Connect one snapshot returned by `input.ports()` to select exactly one device.
@@ -67,6 +69,7 @@ sending with no matching ports raises an error.
 ```python
 import middy as md
 
+md.set_scan_interval('250 ms')
 with md.Output(port=['Synth *', 'Pad[12]']) as output:
     output.send(md.Note('500 ms', 60))
 ```

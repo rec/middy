@@ -3,6 +3,18 @@ use pyo3::prelude::*;
 
 use crate::packets::Backend;
 
+/// Set the shared device scan interval, in seconds or a time unit expression.
+/// Defaults to 100 ms and applies to existing and future inputs and outputs.
+#[pyfunction]
+pub fn set_scan_interval(
+    py: Python<'_>,
+    #[pyo3(from_py_with = crate::units::duration)] interval: u64,
+) -> PyResult<()> {
+    crate::callback::check_blocking_thread()?;
+    py.detach(|| middy::set_scan_interval(std::time::Duration::from_nanos(interval)))
+        .map_err(|e| crate::errors::transport_error(e, "configure"))
+}
+
 #[pyclass(frozen, module = "middy.events")]
 pub struct PortInfo {
     pub value: std::sync::Arc<middy::events::PortInfo>,
