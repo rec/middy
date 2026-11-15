@@ -382,21 +382,18 @@ impl Native {
         name: &CString,
         receiver: Arc<Receiver>,
     ) -> Result<()> {
-        if self.remote.is_some() {
-            let index = match self.remote_index(port) {
+        if let Some(remote) = &mut self.remote {
+            let index = match Self::remote_index(&self.identity, self.generation, port) {
                 Ok(index) => index,
                 Err(error) => {
                     let error = Error::Native(error.to_string());
-                    self.remote
-                        .as_ref()
-                        .unwrap()
-                        .invalidate("open", error.clone());
+                    remote.invalidate("open", error.clone());
                     return Err(error);
                 }
             };
             let limit = receiver.limit;
             self.receiver = Some(Arc::clone(&receiver));
-            return self.remote.as_mut().unwrap().open(
+            return remote.open(
                 index,
                 name.to_str()
                     .map_err(|_| Error::Invalid("port name is not UTF-8".into()))?,
@@ -436,11 +433,13 @@ impl Native {
         result
     }
 
-    fn remote_index(&self, port: Option<&Port>) -> Result<Option<usize>> {
+    fn remote_index(
+        identity: &Arc<()>,
+        generation: u64,
+        port: Option<&Port>,
+    ) -> Result<Option<usize>> {
         port.map(|port| {
-            if !port.owner.ptr_eq(&Arc::downgrade(&self.identity))
-                || port.generation != self.generation
-            {
+            if !port.owner.ptr_eq(&Arc::downgrade(identity)) || port.generation != generation {
                 Err(Error::Invalid(
                     "port belongs to another client or an expired discovery snapshot".into(),
                 ))
@@ -451,19 +450,16 @@ impl Native {
         .transpose()
     }
     pub fn open_output(&mut self, port: Option<&Port>, name: &CString) -> Result<()> {
-        if self.remote.is_some() {
-            let index = match self.remote_index(port) {
+        if let Some(remote) = &mut self.remote {
+            let index = match Self::remote_index(&self.identity, self.generation, port) {
                 Ok(index) => index,
                 Err(error) => {
                     let error = Error::Native(error.to_string());
-                    self.remote
-                        .as_ref()
-                        .unwrap()
-                        .invalidate("open", error.clone());
+                    remote.invalidate("open", error.clone());
                     return Err(error);
                 }
             };
-            return self.remote.as_mut().unwrap().open(
+            return remote.open(
                 index,
                 name.to_str()
                     .map_err(|_| Error::Invalid("port name is not UTF-8".into()))?,
@@ -491,14 +487,10 @@ impl Native {
     }
 
     pub fn close_input(&mut self) -> Result<()> {
-        if self.remote.is_some() && self.receiver.is_some() {
-            self.receiver
-                .as_ref()
-                .unwrap()
-                .retired
-                .store(true, Ordering::SeqCst);
-            let result = self.remote.as_ref().unwrap().close();
-            self.receiver.as_ref().unwrap().drain();
+        if let (Some(remote), Some(receiver)) = (&self.remote, &self.receiver) {
+            receiver.retired.store(true, Ordering::SeqCst);
+            let result = remote.close();
+            receiver.drain();
             self.receiver = None;
             return result;
         }
