@@ -1,16 +1,22 @@
-"""Optional offline tuning sources, diagnostics and exclusive bulk SYX export."""
+"""Offline tuning sources, diagnostics and exclusive bulk SYX export."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-pytest.importorskip("ufor", reason="install middy[ufor]")
 pytest.importorskip("tyro", reason="install middy[cli]")
 
-from ufor.tuning import Computed, FrequencyTable, RatioTable, Tuning
-
-from middy import cli, file_io, midi, tuning
+from middy import (
+    Computed,
+    FrequencyTable,
+    RatioTable,
+    Tuning,
+    cli,
+    file_io,
+    midi,
+    tuning,
+)
 
 
 def invoke(args: list[str]) -> int:

@@ -35,10 +35,9 @@ def main() -> None:
         )
 
         assert md.Note is messages.Note and md.Output is md.midi.Output
-        assert "ufor" not in sys.modules
+        assert md.Tuning(source=md.Computed())(69) == 440
         assert "middy._cli" not in sys.modules
         assert "tyro" not in sys.modules
-        assert "pint" not in sys.modules
         client = md.Output()
         assert not client.closed
         client.close()

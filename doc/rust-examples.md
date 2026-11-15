@@ -587,7 +587,7 @@ Profiles, Property Exchange or instrument configuration writes.
 
 Create `just-three.syx` with keys 69, 70 and 71 tuned to 440, 660 and 880 Hz.
 Unselected keys are preserved. Rust's `bulk_dump` accepts `NoteTuning` values;
-Python's `bulk_dump` instead accepts a uFor tuning and selected MIDI keys.
+Python's `bulk_dump` instead accepts `md.Tuning` and selected MIDI keys.
 
 ```rust
 use middy::{file_io, tuning};

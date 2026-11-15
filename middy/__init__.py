@@ -1,5 +1,11 @@
 """MIDI values and I/O, with public submodules for specialist workflows."""
 
+# Validate interpreter support before importing Python dependencies.
+from . import _core  # noqa: F401
+
+# isort: split
+from ufor.tuning import Computed, FrequencyTable, IntervalPattern, RatioTable, Tuning
+
 __all__: list[str] = [
     "ActiveSensing",
     "Backend",
@@ -11,6 +17,7 @@ __all__: list[str] = [
     "ClockMapping",
     "ComparisonReport",
     "CompoundSendError",
+    "Computed",
     "ConnectError",
     "Continue",
     "ControlChange",
@@ -21,12 +28,14 @@ __all__: list[str] = [
     "DrumKit",
     "Encoding",
     "FrameRate",
+    "FrequencyTable",
     "GmMode",
     "Histogram",
     "IdentityReply",
     "IdentityRequest",
     "InitError",
     "Input",
+    "IntervalPattern",
     "MasterCoarseTuning",
     "MasterFineTuning",
     "MasterVolume",
@@ -56,6 +65,7 @@ __all__: list[str] = [
     "Program",
     "ProgramChange",
     "QuarterFrame",
+    "RatioTable",
     "Rational",
     "Reader",
     "ReceivedPacket",
@@ -83,6 +93,7 @@ __all__: list[str] = [
     "TimestampMode",
     "TimingClock",
     "TuneRequest",
+    "Tuning",
     "TuningTable",
     "UmpPacket",
     "VelocityInterpreter",

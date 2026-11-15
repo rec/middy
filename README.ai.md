@@ -12,7 +12,8 @@ The common root names are the original class objects. `Reader` and `Writer` refe
 to the archive format, `Decoder` to the MIDI 1 byte codec, `Route` to routing, and
 `ParameterStep` to the compound MIDI command. Specialist names such as `Tracker`,
 `Session` and `Report` stay in their submodules. Importing the package does not
-load the optional CLI implementation or uFor adapter dependencies.
+load the optional CLI implementation. The root also exposes `Tuning`, `Computed`,
+`RatioTable`, `IntervalPattern` and `FrequencyTable` from its uFor dependency.
 
 The domain workflows are grouped under `md.tuning`, `md.ci` and `md.sysex`:
 `tuning.query` runs a tuning query, `ci.browse` runs a management scan, and
@@ -242,7 +243,7 @@ See [capture examples](doc/examples.md#8-back-up-and-restore-sysex).
 
 ## Offline uFor tuning
 
-Python 3.13 users with `middy[cli,ufor]` can run `middy ufor-export` on uFor Tuning JSON or Scala `.scl`. Scala requires explicit
+Python 3.13 users with `middy[cli]` can run `middy ufor-export` on Tuning JSON or Scala `.scl`. Scala requires explicit
 root note/frequency. Export creates an ordinary or banked bulk `.syx` file without
 overwriting; sending remains a separate `transfer-send` action. See the
 [tuning example](doc/examples.md#9-export-a-just-intonation-tuning).
@@ -486,24 +487,24 @@ or unsolicited dumps cannot be distinguished. A successful send does not prove
 an instrument accepted or applied the tuning. See the [tuning API](middy/tuning.pyi)
 for constructors and request-tracking operations.
 
-## Optional uFor tuning bridge
+## Tuning definitions
 
-Install the `ufor` extra (`uv sync --extra ufor --python 3.13`).
-`middy.tuning.convert(source, note)` converts one note from an existing uFor
-`Tuning` to a native `NoteTuning`. Missing source notes raise `KeyError`; invalid
+`middy.Tuning`, `Computed`, `RatioTable`, `IntervalPattern` and `FrequencyTable`
+are available with an ordinary install. `middy.tuning.convert(source, note)`
+converts one note from a `Tuning` to a native `NoteTuning`. Missing source notes raise `KeyError`; invalid
 frequencies and evaluation failures raise errors. Python's
 `bulk_dump(source, notes=[...], device_id=..., name=..., program=0, bank=None)`
 converts selected keys internally, preserving omitted keys and missing source
 mappings with `NoChange`. This is an explicit Python-only uFor integration;
 Rust's builder accepts `NoteTuning` values. Python's `note_changes()` still accepts
 `NoteTuning` values, and `BulkDump(table=..., ...)` supports direct construction
-without uFor. These operations open no ports and send nothing. See the
+without constructing a source tuning. These operations open no ports and send nothing. See the
 [tuning example](doc/examples.md#9-export-a-just-intonation-tuning).
 Python bulk dumps, `controls.tuning_program()` and `ufor-export` default to tuning
 program 0. Rust callers pass the program explicitly.
 
 middy supports Python 3.13 and newer. Ordinary installs
-use reccy for unit-aware Python inputs; uFor remains an optional extra.
+use reccy for unit-aware Python inputs and uFor for tuning definitions.
 
 `Input`, `Output` and `discovery.Poller` are frozen Pydantic configuration models.
 Their existing keyword constructors, units and lazy connection behavior remain.

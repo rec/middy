@@ -159,16 +159,14 @@ with (
 ## 9. Export a just-intonation tuning
 
 Create `just-three.syx` with keys 69, 70 and 71 tuned to 440, 660 and 880 Hz.
-Install the `ufor` extra first. The dump targets MTS device ID 0, tuning program 0;
+The dump targets MTS device ID 0, tuning program 0;
 unselected keys use NoChange. Send it with the restore example when the receiving
 synth supports these features and is configured for that device ID.
 
 ```python
-from ufor.tuning import RatioTable, Tuning
-
 import middy as md
 
-source = Tuning(source=RatioTable(values=['1', '3/2', '2']), root_note=69)
+source = md.Tuning(source=md.RatioTable(values=['1', '3/2', '2']), root_note=69)
 dump = md.tuning.bulk_dump(
     source,
     notes=[69, 70, 71],
@@ -185,11 +183,11 @@ Then use the beat-based tune example with notes 69, 70 and 71.
 MTS program numbers are 0..127, unlike ordinary program changes.
 Both calls default to tuning program 0; pass `program=...` to choose another.
 
-Python's `md.tuning.bulk_dump()` accepts a uFor tuning and converts the selected
+Python's `md.tuning.bulk_dump()` accepts an `md.Tuning` and converts the selected
 keys internally. Unselected keys and keys outside a finite source's coverage use
 `NoChange`; invalid frequencies and evaluation errors raise errors. This is a
 Python-only convenience: Rust's `tuning::bulk_dump()` accepts `NoteTuning` values.
-Without uFor, construct `md.BulkDump` with a complete `md.TuningTable` directly.
+To supply MIDI tuning entries directly, construct `md.tuning.BulkDump` with a complete `md.TuningTable`.
 Use `output.send(md.events.with_gap(iter(messages), '100 ms'))` for explicit waits;
 `md.tuning.note_changes()` produces
 ordered messages of at most 127 keys each.

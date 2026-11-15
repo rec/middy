@@ -1,15 +1,20 @@
-"""Optional source resolution and MTS generation, with no MIDI transport."""
+"""Source resolution and MTS generation through the public tuning classes."""
 
 from fractions import Fraction
 
 import pytest
-
-pytest.importorskip("ufor", reason="install middy[ufor] for tuning integration tests")
-
 from ufor import scala
-from ufor.tuning import Computed, FrequencyTable, IntervalPattern, RatioTable, Tuning
 
-from middy import codecs, messages, tuning
+from middy import (
+    Computed,
+    FrequencyTable,
+    IntervalPattern,
+    RatioTable,
+    Tuning,
+    codecs,
+    messages,
+    tuning,
+)
 
 
 def test_conversion_returns_a_native_note_tuning() -> None:

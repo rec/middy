@@ -28,14 +28,14 @@ def bulk_dump(
     name: str,
     bank: int | None = None,
 ) -> tuning.BulkDump:
-    """Build a bulk dump from uFor; preserve omitted and unmapped MIDI keys.
+    """Build a bulk dump from Tuning; preserve omitted and unmapped MIDI keys.
 
     Invalid frequencies and source evaluation errors propagate. No ports are opened.
     """
     from ufor.tuning import Tuning
 
     if not isinstance(source, Tuning):
-        raise TypeError("source must be a uFor Tuning")
+        raise TypeError("source must be a Tuning")
     notes = _check_notes(notes)
     values: list[tuning.Pitch | tuning.NoChange] = [
         tuning.NoChange() for _ in range(128)
@@ -57,7 +57,7 @@ def convert(source: Tuning, note: int) -> tuning.NoteTuning:
     from ufor.tuning import Tuning
 
     if not isinstance(source, Tuning):
-        raise TypeError("source must be a uFor Tuning")
+        raise TypeError("source must be a Tuning")
     _check_notes([note])
     if not _covered(source, note):
         raise KeyError(f"note {note} is outside the finite uFor tuning")

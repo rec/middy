@@ -83,7 +83,7 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
                 "middy/_worker.py",
                 "middy/_native.pyi",
             } <= set(names)
-            assert archive.read("middy/__init__.py") == b""
+            assert archive.read("middy/__init__.py")
             assert any(
                 n.startswith("middy/_core.") and n.endswith((".so", ".pyd"))
                 for n in names
@@ -106,7 +106,9 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
                 "tyro",
                 "reccy",
             }
-            assert set(metadata.get_all("Provides-Extra", [])) == {"ufor", "cli"}
+            assert set(metadata.get_all("Provides-Extra", [])) == {"cli"}
+            ufor = next(r for r in requirements if r.name == "ufor")
+            assert ufor.marker is None
             for python in ["3.11", "3.13", "3.15"]:
                 environment = {
                     "extra": "",
@@ -117,16 +119,7 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
                     r.name
                     for r in requirements
                     if r.marker is None or r.marker.evaluate(environment)
-                } == {"pydantic", "reccy"}
-                ufor = next(r for r in requirements if r.name == "ufor")
-                assert ufor.marker is not None
-                assert ufor.marker.evaluate(
-                    {
-                        "extra": "ufor",
-                        "python_version": python,
-                        "python_full_version": f"{python}.0",
-                    }
-                ) == (python != "3.11")
+                } == {"pydantic", "reccy", "ufor"}
                 for r in requirements:
                     assert (
                         r.marker is None
@@ -137,7 +130,7 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
                                 "python_full_version": f"{python}.0",
                             }
                         )
-                    ) == (r.name in {"tyro", "pydantic", "reccy"})
+                    ) == (r.name in {"tyro", "pydantic", "reccy", "ufor"})
             assert metadata["License-Expression"] == "MIT"
             assert any(n.endswith("/licenses/LICENSE") for n in names)
             assert any(

@@ -1,8 +1,6 @@
 """MTS values, explicit decoding and caller-driven reply tracking, without I/O."""
 
 import inspect
-import subprocess
-import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -35,17 +33,6 @@ def test_bank_absence_is_distinct_from_zero_and_note_change_realtime_is_checked(
         assert decoded is not None and decoded.message == value
     with pytest.raises(TypeError):
         request.replace(bank=True)  # ty: ignore[invalid-argument-type]
-
-
-def test_tuning_values_and_message_generation_do_not_require_ufor() -> None:
-    subprocess.run(
-        [
-            sys.executable,
-            str(Path(__file__).parent / "native/middy_tuning_without_ufor.py"),
-        ],
-        check=True,
-        timeout=15,
-    )
 
 
 def tuning_vectors() -> Iterator[tuple[messages.Message, bytes]]:

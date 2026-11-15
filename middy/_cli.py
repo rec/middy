@@ -300,7 +300,7 @@ class TuningQuery(TuningPreview, frozen=True):
 
 
 class UforExport(BaseModel, frozen=True):
-    """Convert uFor notes to a new bulk-dump SYX file; requires middy[ufor]."""
+    """Convert tuning notes to a new bulk-dump SYX file."""
 
     source: tyro.conf.Positional[Path]
     source_format: Literal["tuning-json", "scala"]

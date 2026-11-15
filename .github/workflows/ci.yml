@@ -92,9 +92,9 @@ jobs:
         run: |
           rustup toolchain install 1.87.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.87.0
-      - name: Install CLI and supported optional integrations
+      - name: Install package and CLI
         run: |
-          uv sync --frozen --python '${{ matrix.python }}' --extra cli --extra ufor
+          uv sync --frozen --python '${{ matrix.python }}' --extra cli
       - name: Rust checks and linked tests
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
@@ -144,7 +144,7 @@ jobs:
             wheel_python="$RUNNER_TEMP/middy-wheel/bin/python"
           fi
           uv pip install --python "$wheel_python" dist/*.whl pytest
-          uv export --frozen --extra cli --extra ufor --no-emit-project --no-dev --no-hashes --output-file target/wheel-optional-requirements.txt
+          uv export --frozen --extra cli --no-emit-project --no-dev --no-hashes --output-file target/wheel-optional-requirements.txt
           uv pip install --python "$wheel_python" --no-deps -r target/wheel-optional-requirements.txt
           cd "$RUNNER_TEMP"
           "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test/test_contract.py" "$GITHUB_WORKSPACE/test/test_packets.py" "$GITHUB_WORKSPACE/test/test_isolation.py" "$GITHUB_WORKSPACE/test/test_messages.py" "$GITHUB_WORKSPACE/test/test_codecs.py" "$GITHUB_WORKSPACE/test/test_controls.py" "$GITHUB_WORKSPACE/test/test_tuning.py" "$GITHUB_WORKSPACE/test/test_profiles.py" "$GITHUB_WORKSPACE/test/test_profile_engines.py" "$GITHUB_WORKSPACE/test/test_ump.py" "$GITHUB_WORKSPACE/test/test_files.py" "$GITHUB_WORKSPACE/test/test_archive.py" "$GITHUB_WORKSPACE/test/test_live.py" "$GITHUB_WORKSPACE/test/test_file_timing.py" "$GITHUB_WORKSPACE/test/test_event_views.py" "$GITHUB_WORKSPACE/test/test_ci.py" "$GITHUB_WORKSPACE/test/test_ufor_tuning.py"

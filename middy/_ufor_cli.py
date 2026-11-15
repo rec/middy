@@ -1,19 +1,15 @@
-"""Optional offline uFor source resolution and bulk-dump export."""
+"""Offline tuning source resolution and bulk-dump export."""
 
 from __future__ import annotations
+
+from ufor import scala
+from ufor.tuning import Tuning
 
 from . import codecs, file_io
 from ._cli import UforExport, emit
 
 
 def run_ufor(config: UforExport) -> int:
-    try:
-        from ufor import scala
-        from ufor.tuning import Tuning
-    except ModuleNotFoundError as error:
-        if error.name != "ufor":
-            raise
-        raise ValueError("Install middy[cli,ufor] for uFor tuning commands") from error
     from . import tuning
 
     text = config.source.read_text()
