@@ -17,6 +17,7 @@ pub(crate) struct Message {
 }
 #[derive(Clone, Default)]
 pub(crate) struct Metadata {
+    pub port: Option<std::sync::Arc<middy::events::PortInfo>>,
     pub timestamp: Option<middy::events::Timestamp>,
     pub stream: Option<std::sync::Arc<str>>,
     pub span: Option<middy::events::SourceSpan>,
@@ -36,16 +37,21 @@ impl Message {
             }
         }
         self.metadata
-            .set(
-                metadata
-                    .filter(|m| m.timestamp.is_some() || m.stream.is_some() || m.span.is_some()),
-            )
+            .set(metadata.filter(|m| {
+                m.port.is_some() || m.timestamp.is_some() || m.stream.is_some() || m.span.is_some()
+            }))
             .map_err(|_| PyValueError::new_err("message metadata is already set"))
     }
 }
 
 #[pymethods]
 impl Message {
+    #[getter]
+    fn port(&self) -> Option<crate::ports::PortInfo> {
+        self.metadata()
+            .and_then(|m| m.port.clone())
+            .map(|value| crate::ports::PortInfo { value })
+    }
     /// Return this message unchanged; note-addressed subclasses shift their note number.
     fn transpose(
         slf: PyRef<'_, Self>,

@@ -242,6 +242,7 @@ fn large_escape_records_stream_and_group_routing_is_not_silently_discarded() {
             .unwrap(),
     )))
     .with_metadata(middy::messages::Metadata {
+        port: None,
         stream: Some("s".into()),
         timestamp: Some(origin.clone()),
         span: None,

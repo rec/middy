@@ -14,6 +14,15 @@ fn timestamp() -> Timestamp {
 }
 fn metadata() -> Metadata {
     Metadata {
+        port: Some(
+            middy::PortInfo {
+                identity: "connection".into(),
+                name: "Keyboard".into(),
+                backend: middy::Backend::CoreMidi,
+                backend_id: 1,
+            }
+            .into(),
+        ),
         timestamp: Some(timestamp()),
         stream: Some("keyboard".into()),
         span: Some(SourceSpan {

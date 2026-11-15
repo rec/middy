@@ -434,7 +434,7 @@ impl Capture {
     ) -> bool {
         let message = match item {
             Item::Diagnostic(d) => {
-                if d.stream == stream {
+                if crate::events::source_matches(stream, Some(&d.stream)) {
                     self.end("failed", &d.reason);
                     return false;
                 }
@@ -447,7 +447,7 @@ impl Capture {
             self.report.ignored_events += 1;
             return true;
         };
-        if message.stream() != Some(stream) {
+        if !crate::events::source_matches(stream, message.stream()) {
             self.report.ignored_events += 1;
             return true;
         }

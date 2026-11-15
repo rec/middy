@@ -34,6 +34,7 @@ struct Marker {
     time: Option<Timestamp>,
 }
 pub struct Decoder {
+    port: Option<std::sync::Arc<crate::events::PortInfo>>,
     stream: std::sync::Arc<str>,
     encoding: Encoding,
     bytes: codecs::Decoder,
@@ -49,6 +50,7 @@ impl Decoder {
             return Err(invalid(0, "empty source identity"));
         }
         Ok(Self {
+            port: None,
             stream: stream.into(),
             encoding,
             bytes: codecs::Decoder::new(limit).map_err(|e| invalid(0, e))?,
@@ -70,6 +72,10 @@ impl Decoder {
     }
     pub(crate) fn begin_at(&mut self, index: u64) {
         self.expected = index;
+    }
+    pub fn with_port(mut self, port: crate::events::PortInfo) -> Self {
+        self.port = Some(port.into());
+        self
     }
     pub fn pending(&self) -> bool {
         self.bytes.pending_start().is_some() || self.words.pending_start().is_some()
@@ -195,6 +201,7 @@ impl Decoder {
                         &current
                     };
                     let event = (message).with_metadata(crate::messages::Metadata {
+                        port: self.port.clone(),
                         stream: Some(self.stream.clone()),
                         timestamp: time.clone(),
                         span: Some(SourceSpan {

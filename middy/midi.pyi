@@ -158,12 +158,13 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
         | messages.Message
         | archive.Gap
         | archive.Discontinuity
+        | archive.Metadata
     ]: ...
     def ports(self) -> list[Port]: ...
     @property
     def worker_failure(self) -> Exception | None: ...
     def connect(
-        self, port: Port, callback: Callable[[T], object] | None = None
+        self, port: Port | None = None, callback: Callable[[T], object] | None = None
     ) -> Input[T]: ...
     def create_virtual(
         self, name: str, callback: Callable[[T], object] | None = None

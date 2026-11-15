@@ -35,6 +35,7 @@ fn archive_comparison_retains_occurrence_metadata_while_message_equality_ignores
         NoteOn::new(60).unwrap().with_channel(1).unwrap(),
     ))
     .with_metadata(Metadata {
+        port: None,
         timestamp: Some(Timestamp {
             ticks: 1,
             clock: clock.clone(),

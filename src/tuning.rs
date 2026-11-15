@@ -675,6 +675,12 @@ pub(crate) fn replacement<'py>(
             let name = name.extract::<String>()?;
             if let Some(metadata) = &mut metadata {
                 match name.as_str() {
+                    "port" => {
+                        std::sync::Arc::make_mut(metadata.get_or_insert_default()).port = value
+                            .extract::<Option<PyRef<'_, crate::ports::PortInfo>>>()?
+                            .map(|p| p.value.clone());
+                        continue;
+                    }
                     "timestamp" => {
                         std::sync::Arc::make_mut(metadata.get_or_insert_default()).timestamp =
                             value

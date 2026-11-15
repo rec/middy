@@ -36,6 +36,8 @@ class Message:
     @property
     def timestamp(self) -> events.Timestamp | None: ...
     @property
+    def port(self) -> events.PortInfo | None: ...
+    @property
     def stream(self) -> str | None: ...
     @property
     def span(self) -> events.SourceSpan | None: ...
@@ -45,6 +47,7 @@ class Message:
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> Self: ...
 
 class NoteOn(Message):
@@ -87,6 +90,7 @@ class NoteOn(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> NoteOn: ...
 
 class SysEx(Message):
@@ -105,6 +109,7 @@ class SysEx(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> SysEx: ...
 
 class NoteOff(Message):
@@ -147,6 +152,7 @@ class NoteOff(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> NoteOff: ...
 
 class PolyPressure(Message):
@@ -180,6 +186,7 @@ class PolyPressure(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> PolyPressure: ...
 
 class ControlChange(Message):
@@ -217,6 +224,7 @@ class ControlChange(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ControlChange: ...
 
 class ProgramChange(Message):
@@ -254,6 +262,7 @@ class ProgramChange(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ProgramChange: ...
 
 class ChannelPressure(Message):
@@ -283,6 +292,7 @@ class ChannelPressure(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ChannelPressure: ...
 
 class PitchBend(Message):
@@ -312,6 +322,7 @@ class PitchBend(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> PitchBend: ...
 
 class QuarterFrame(Message):
@@ -333,6 +344,7 @@ class QuarterFrame(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> QuarterFrame: ...
 
 class SongPosition(Message):
@@ -349,6 +361,7 @@ class SongPosition(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> SongPosition: ...
 
 class SongSelect(Message):
@@ -365,6 +378,7 @@ class SongSelect(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> SongSelect: ...
 
 class TuneRequest(Message):
@@ -378,6 +392,7 @@ class TuneRequest(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> TuneRequest: ...
 
 class TimingClock(Message):
@@ -391,6 +406,7 @@ class TimingClock(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> TimingClock: ...
 
 class Start(Message):
@@ -404,6 +420,7 @@ class Start(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> Start: ...
 
 class Continue(Message):
@@ -417,6 +434,7 @@ class Continue(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> Continue: ...
 
 class Stop(Message):
@@ -430,6 +448,7 @@ class Stop(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> Stop: ...
 
 class ActiveSensing(Message):
@@ -443,6 +462,7 @@ class ActiveSensing(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ActiveSensing: ...
 
 class SystemReset(Message):
@@ -456,6 +476,7 @@ class SystemReset(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> SystemReset: ...
 
 class ParameterSet(Message):
@@ -493,6 +514,7 @@ class ParameterSet(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ParameterSet: ...
 
 class ParameterStep(Message):
@@ -526,6 +548,7 @@ class ParameterStep(Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> ParameterStep: ...
 
 class PerNoteController(Message):

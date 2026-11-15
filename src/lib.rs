@@ -189,6 +189,7 @@ fn populate_midi(module: &Bound<'_, PyModule>) -> PyResult<()> {
     }
     native.add_class::<input::Input>()?;
     native.add_class::<input::InputConnection>()?;
+    native.add_class::<input::AllInputConnection>()?;
     native.add_class::<output::Output>()?;
     native.add_class::<output::OutputConnection>()?;
     native.add_class::<output::OutputState>()?;

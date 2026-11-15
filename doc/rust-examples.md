@@ -43,8 +43,8 @@ The `?` operator propagates a checked error.
 Both Rust and Python construct Input/Output lazily; first discovery or I/O
 initializes the resource. Empty playback opens no ports.
 
-Live examples select the first available MIDI port. Connect a keyboard or synth
-before running them. MIDI carries messages, not audio. Channels are 1..16, notes
+Live inputs listen to all visible ports, including ports connected later. Outputs
+select the first available port. MIDI carries messages, not audio. Channels are 1..16, notes
 and velocities are 0..127, and program numbers are 1..128.
 
 ## 1. Play one note
@@ -107,11 +107,20 @@ create a new object to reconnect. Python `connect()` returns the same object; Ru
 
 ```rust
 use middy::midi::Input;
+use middy::messages::Message;
 
 for message in Input::new() {
-    println!("{message:?}");
+    println!("{:?}: {message:?}", message.port());
 }
 ```
+
+The default input opens even when no devices are present and checks for new or
+removed ports every 100 ms within the selected backend and encoding. Use
+`with_port("Keyboard")?` or `connect(&ports[index])?` to select one port.
+`message.port()` returns optional immutable `PortInfo` containing `name`,
+`backend`, `backend_id` and `identity`. Names and backend IDs may be duplicated;
+the identity distinguishes connections and changes on reconnection. Each port
+has its own stream, clock and decoder. Archive recordings retain the description.
 
 Input yields messages, never full `Note` values. Malformed traffic and loss are
 reported on stderr; decoding continues. Terminal connection errors stop the
@@ -518,7 +527,7 @@ The generic helper yields `events::GapItem<T>` values (`Item(T)` or
 
 ## 13. Query a tuning dump
 
-This asks device 0 for tuning program 2 through the first input/output pair.
+This asks device 0 for tuning program 2 through all inputs and the first output.
 The final report includes a matching reply, timeout or failure with known progress.
 
 ```rust
@@ -657,7 +666,7 @@ This is the same ten-second passive monitor, with native typed entries:
 use middy::{inspection, midi::Input};
 use std::time::Duration;
 
-let mut input = Input::new();
+let mut input = Input::new().with_port("Keyboard")?;
 let source = input.stream()?.to_owned();
 let clock = input.clock()?.clone();
 let mut monitor = inspection::Monitor::new(source, clock, Default::default())?;
@@ -821,7 +830,7 @@ use middy::events::InputItem;
 use middy::midi::Input;
 
 let mut interpreter = ControlInterpreter::new(None)?;
-let mut input = Input::new();
+let mut input = Input::new().with_port("Keyboard")?;
 for item in input.with_errors() {
     let observations = match item? {
         InputItem::Message(message) => interpreter.feed(&message)?,

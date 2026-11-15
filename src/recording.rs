@@ -120,7 +120,11 @@ impl Recorder {
         }
         let r = crate::archive::extract(record)?;
         if let Record::Event(e) = &r {
-            if e.stream() != Some(self.stream.as_str()) {
+            if !e.stream().is_some_and(|s| {
+                s == self.stream
+                    || s.strip_prefix(&self.stream)
+                        .is_some_and(|s| s.starts_with('/'))
+            }) {
                 return Err(PyValueError::new_err(
                     "recording source differs from event stream",
                 ));

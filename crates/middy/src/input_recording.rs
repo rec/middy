@@ -69,6 +69,7 @@ impl Input {
     }
 }
 pub(super) struct Attachment {
+    sources: std::collections::BTreeMap<String, Option<crate::events::PortInfo>>,
     pub recorder: Arc<crate::archive::Recorder>,
     stopping: bool,
     clocks: BTreeSet<String>,
@@ -86,6 +87,10 @@ impl Core {
         }
         let clock = self.clock.as_ref().expect("opened clock");
         self.recording = Some(Attachment {
+            sources: std::collections::BTreeMap::from([(
+                self.stream.clone().expect("opened stream"),
+                None,
+            )]),
             recorder: recorder.clone(),
             stopping: false,
             clocks: BTreeSet::from([clock.identity().into()]),
@@ -109,6 +114,29 @@ impl Core {
         };
         if attachment.stopping {
             return;
+        }
+        let (stream, port) = match item {
+            Item::Message(message) => (message.stream().unwrap_or_default(), message.port()),
+            Item::Diagnostic(diagnostic) => (diagnostic.stream.as_str(), None),
+        };
+        if !attachment.sources.contains_key(stream) {
+            attachment.recorder.record(Record::Stream {
+                id: stream.into(),
+                label: port.map_or("", |p| p.name.as_str()).into(),
+                clock_identity: None,
+            });
+            attachment.sources.insert(stream.into(), None);
+        }
+        if let Some(port) = port {
+            if attachment.sources.get(stream).and_then(|p| p.as_ref()) != Some(port) {
+                match crate::archive::port_record(stream, port) {
+                    Ok(record) => {
+                        attachment.recorder.record(record);
+                    }
+                    Err(error) => attachment.recorder.fail(error.to_string()),
+                }
+                attachment.sources.insert(stream.into(), Some(port.clone()));
+            }
         }
         let record = match item {
             Item::Message(message) => {
@@ -152,8 +180,24 @@ impl Core {
         for packet in packets {
             self.decode(packet);
         }
+        let items = {
+            let mut queue = self.all_queue.0.lock().unwrap_or_else(|p| p.into_inner());
+            queue.bytes = 0;
+            std::mem::take(&mut queue.items)
+        };
+        for item in items {
+            if let crate::transport::all::AllItem::Decoded(item) = item {
+                self.accept_item(item);
+            }
+        }
         let lost = self.dropped_packets().saturating_sub(self.reported_loss);
-        if lost != 0 {
+        if lost != 0 && self.all_diagnostics.is_some() {
+            self.recording
+                .as_ref()
+                .expect("attached recorder")
+                .recorder
+                .fail("known input loss at recording/close boundary".into());
+        } else if lost != 0 {
             let decoder = self.decoder.as_mut().expect("decoded recording");
             let item = decoder.loss(lost, "known input loss at recording/close boundary".into());
             self.expected = self.expected.saturating_add(lost);
@@ -162,10 +206,11 @@ impl Core {
             self.reported_loss = self.reported_loss.saturating_add(lost);
         }
         let attachment = self.recording.as_mut().expect("attached recorder");
-        if self
-            .decoder
-            .as_ref()
-            .is_some_and(crate::live::Decoder::pending)
+        if self.all_diagnostics.as_ref().is_some_and(|d| d.pending())
+            || self
+                .decoder
+                .as_ref()
+                .is_some_and(crate::live::Decoder::pending)
         {
             attachment
                 .recorder
@@ -260,6 +305,7 @@ mod tests {
         core.clock = Some(clock);
         core.decoder = Some(Decoder::new("retry".into(), Encoding::Bytes, 1024).unwrap());
         core.recording = Some(Attachment {
+            sources: std::collections::BTreeMap::from([("retry".into(), None)]),
             recorder,
             stopping: false,
             clocks: BTreeSet::from(["retry".into()]),

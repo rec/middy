@@ -128,6 +128,7 @@ impl std::hash::Hash for Record {
 }
 #[derive(Default)]
 struct Registry {
+    ports: BTreeMap<String, std::sync::Arc<crate::events::PortInfo>>,
     clocks: BTreeMap<String, Clock>,
     streams: BTreeMap<std::sync::Arc<str>, (String, Option<String>)>,
     bytes: usize,
@@ -216,13 +217,33 @@ impl Registry {
                 self.check_event_header(e.stream().unwrap_or_default(), e.timestamp(), e.span())?;
             }
             Record::Metadata {
-                stream, timestamp, ..
+                stream,
+                timestamp,
+                key,
+                data,
             } => {
                 if stream
                     .as_ref()
                     .is_some_and(|s| !self.streams.contains_key(s.as_str()))
                 {
                     return Err(invalid(0, "metadata stream is undeclared"));
+                }
+                if key == "middy.port" {
+                    let stream = stream
+                        .as_ref()
+                        .ok_or_else(|| invalid(0, "port metadata requires a stream"))?;
+                    let port = decode_port(data)?;
+                    if self.ports.get(stream).is_some_and(|p| p.as_ref() != &port) {
+                        return Err(invalid(0, "port identity changed within a stream"));
+                    }
+                    if !self.ports.contains_key(stream) {
+                        let n = port.identity.len() + port.name.len();
+                        if n > 8_388_608usize.saturating_sub(self.bytes) {
+                            return Err(invalid(0, "descriptor byte limit"));
+                        }
+                        self.bytes += n;
+                    }
+                    self.ports.insert(stream.clone(), port.into());
                 }
                 if let Some(t) = timestamp {
                     if t.clock.mode() == Some(false)
@@ -286,6 +307,51 @@ fn timestamp(out: &mut Vec<u8>, t: Option<&Timestamp>) -> io::Result<()> {
         string(out, t.clock.identity())?;
     }
     Ok(())
+}
+/// Port descriptions use an ordinary metadata record; the archive framing is unchanged.
+pub fn port_record(stream: &str, port: &crate::events::PortInfo) -> io::Result<Record> {
+    let mut data = vec![1];
+    string(&mut data, &port.identity)?;
+    string(&mut data, &port.name)?;
+    data.extend((port.backend as u64).to_be_bytes());
+    data.extend(port.backend_id.to_be_bytes());
+    Ok(Record::Metadata {
+        stream: Some(stream.into()),
+        timestamp: None,
+        key: "middy.port".into(),
+        data,
+    })
+}
+fn decode_port(data: &[u8]) -> io::Result<crate::events::PortInfo> {
+    let mut fields = Fields::new(data);
+    if fields.byte()? != 1 {
+        return Err(invalid(0, "unsupported port metadata version"));
+    }
+    let identity = fields.string()?;
+    if identity.is_empty() {
+        return Err(invalid(0, "empty port identity"));
+    }
+    let name = fields.string()?;
+    use crate::transport::Backend;
+    let backend = match fields.u64()? {
+        1 => Backend::CoreMidi,
+        2 => Backend::AlsaSeq,
+        3 => Backend::AlsaRaw,
+        5 => Backend::WinMm,
+        0x1000 => Backend::AlsaRawUmp,
+        0x1001 => Backend::AlsaSeqUmp,
+        0x1002 => Backend::CoreMidiUmp,
+        0x1003 => Backend::WindowsMidiServices,
+        _ => return Err(invalid(0, "invalid port backend")),
+    };
+    let backend_id = fields.u64()?;
+    fields.finish()?;
+    Ok(crate::events::PortInfo {
+        identity,
+        name,
+        backend,
+        backend_id,
+    })
 }
 fn command(out: &mut Vec<u8>, c: &m::AnyCommand) -> io::Result<()> {
     use m::AnyCommand::*;
@@ -688,6 +754,7 @@ fn decode(body: &[u8], registry: &Registry, preserve: bool) -> io::Result<Record
             };
             Record::Event(Box::new(
                 (message).with_metadata(crate::messages::Metadata {
+                    port: registry.ports.get(&stream).cloned(),
                     stream: Some(
                         registry
                             .streams
@@ -916,6 +983,13 @@ impl<W: Write> Writer<W> {
     pub fn write(&mut self, r: &Record) -> io::Result<()> {
         if self.finished || self.failed {
             return Err(invalid(self.offset, "writer closed or failed"));
+        }
+        if let Record::Event(message) = r {
+            if let (Some(stream), Some(port)) = (message.stream(), message.port()) {
+                if self.registry.ports.get(stream).map(AsRef::as_ref) != Some(port) {
+                    self.write(&port_record(stream, port)?)?;
+                }
+            }
         }
         let result = (|| {
             if payload_size(r)? > self.limit {

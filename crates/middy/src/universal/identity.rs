@@ -136,11 +136,11 @@ pub fn identify_with(
             return Ok(report);
         }
         match item {
-            Item::Diagnostic(d) if d.stream == stream => {
+            Item::Diagnostic(d) if crate::events::source_matches(stream, Some(&d.stream)) => {
                 report.end("failed", &d.reason);
                 return Ok(report);
             }
-            Item::Message(m) if m.stream() == Some(stream) => {
+            Item::Message(m) if crate::events::source_matches(stream, m.stream()) => {
                 if let Payload::Message(AnyMessage::SysEx(reply)) = m.as_ref() {
                     if is_identity_reply(reply.data())
                         && (options.device_id == 127 || reply.data()[1] == options.device_id)

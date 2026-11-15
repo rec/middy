@@ -77,6 +77,8 @@ _Channel = Annotated[int, BeforeValidator(_builtin_integer), Field(ge=1, le=16)]
 
 
 class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True):
+    """Listen to all current and future ports, or select one with port/connect."""
+
     raw: bool = False
     channel: _Channel | list[_Channel | None] | None = None
     event_limit: int = Field(default=128, gt=0)
@@ -165,8 +167,14 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         return self._failure
 
     def connect(
-        self, port: midi.Port, callback: Callable[[T], object] | None = None
+        self,
+        port: midi.Port | None = None,
+        callback: Callable[[T], object] | None = None,
     ) -> Input[T]:
+        if port is not None and not isinstance(port, midi.Port):
+            raise TypeError("port must be a discovery snapshot")
+        if port is None and self.port is not None:
+            port = _native.select_port(self.ports(), self.port, "input")
         self._open(port, None, callback)
         return self
 
@@ -186,15 +194,27 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         if self._closed or self._connection is not None:
             raise midi.StateError("input is closed or already connected")
         validate_open(callback=callback)
-        if name is None and not isinstance(port, midi.Port):
-            raise TypeError("port must be a discovery snapshot")
         self._initialize()
         assert self._native_client is not None
         identity = uuid4().hex
         connection = _InputState[T]._create(self, callback)
+        connection._all = port is None and name is None
+        connection._port_name = port.name if port is not None else name or ""
+        connection._port_id = port.backend_id if port is not None else 0
+        if port is not None:
+            connection._port = events.PortInfo(
+                name=port.name,
+                backend=port.backend,
+                backend_id=port.backend_id,
+                identity=connection.stream,
+            )
         transport = _InputTransport[T]._create(self)
         transport._native = (
-            self._native_client.connect(
+            self._native_client.listen_all(
+                connection._deliver, connection.stream, self.sysex_limit, self.raw
+            )
+            if connection._all
+            else self._native_client.connect(
                 cast(midi.Port, port), connection._deliver, identity
             )
             if name is None
@@ -215,6 +235,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         | messages.Message
         | archive.Gap
         | archive.Discontinuity
+        | archive.Metadata
     ]:
         """Capture to memory and close the input; use file_io.write to save records."""
         seconds = _units.real(duration, "second")
@@ -243,6 +264,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
                 | messages.Message
                 | archive.Gap
                 | archive.Discontinuity
+                | archive.Metadata
             ],
             records,
         )
@@ -253,7 +275,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         if self._closed or (self._connection is not None and self._connection._closing):
             raise midi.StateError("input is closed")
         if self._connection is None:
-            self.connect(_native.select_port(self.ports(), self.port, "input"))
+            self.connect()
         return self
 
     def __exit__(
@@ -724,10 +746,19 @@ class _InputTransport[T]:
     @classmethod
     def _create(cls, client: Input[T]) -> _InputTransport[T]:
         connection = object.__new__(cls)
-        connection._native = cast(_native.InputConnection | None, None)
+        connection._native = cast(
+            _native.InputConnection | _native.AllInputConnection | None, None
+        )
         connection._snapshot = None
         connection._closed = True
         return connection
+
+    @property
+    def pending(self) -> bool:
+        return (
+            isinstance(self._native, _native.AllInputConnection)
+            and self._native.pending
+        )
 
     @property
     def closed(self) -> bool:
@@ -886,6 +917,11 @@ class _OutputState:
 
 
 class _InputState[T = messages.Message | events.StreamDiagnostic]:
+    _all: bool
+    _port: events.PortInfo | None
+    _port_name: str
+    _port_id: int
+    _recording_sources: dict[str, events.PortInfo | None]
     _raw: _InputTransport[T] | None
     _channels: frozenset[int | None] | None
     _stream: str
@@ -941,6 +977,11 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
         connection._recorder = None
         connection._recording_in_memory = False
         connection._recording_clocks = set()
+        connection._recording_sources = {}
+        connection._all = False
+        connection._port = None
+        connection._port_name = ""
+        connection._port_id = 0
         connection._recording_starting = False
         connection._known_lost = 0
         connection._ignored_on_close = 0
@@ -989,6 +1030,8 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
 
     @property
     def last_message_time(self) -> float | None:
+        if self._all and self._raw is not None:
+            return self._raw.last_message_time or self._last_message_time
         return self._last_message_time
 
     @property
@@ -1007,7 +1050,12 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
                 and not self._recording_stopping
                 and not isinstance(item, events.ReceivedPacket)
             ):
-                record_item(self._recorder, item, self._recording_clocks)
+                record_item(
+                    self._recorder,
+                    item,
+                    self._recording_clocks,
+                    self._recording_sources,
+                )
             if self._bridge is None and self._failure is None:
                 try:
                     self._queue.put_nowait(cast(T, item))
@@ -1017,15 +1065,38 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
                         "recording has independent admission"
                     )
 
-    def _deliver(self, packet: events.ReceivedPacket) -> None:
+    def _deliver(
+        self, packet: events.ReceivedPacket | messages.Message | events.StreamDiagnostic
+    ) -> None:
         with self._lock:
             if self._closing:
                 self._ignored_on_close += 1
                 return
             self._last_message_time = monotonic()
+            if (
+                isinstance(packet, events.ReceivedPacket)
+                and not self._all
+                and self._port is None
+                and packet.clock.backend is not None
+            ):
+                self._port = events.PortInfo(
+                    name=self._port_name,
+                    backend=packet.clock.backend,
+                    backend_id=self._port_id,
+                    identity=self._stream,
+                )
             items: list[
                 messages.Message | events.StreamDiagnostic | events.ReceivedPacket
-            ] = [packet] if self._decoder is None else list(self._decoder.feed(packet))
+            ] = (
+                [packet]
+                if self._all or self._decoder is None
+                else list(self._decoder.feed(cast(events.ReceivedPacket, packet)))
+            )
+            if not self._all and self._port is not None:
+                items = [
+                    i.replace(port=self._port) if isinstance(i, messages.Message) else i
+                    for i in items
+                ]
             if self._channels is not None:
                 items = [
                     i
@@ -1181,13 +1252,19 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
                 closed = self._closing
                 if not closed:
                     self._recording_clocks = {self.clock.identity}
+                    self._recording_sources = {self._stream: None}
                     self._recording_in_memory = destination is None
                     if destination is None:
                         # Memory capture includes events buffered before attachment.
                         with self._queue.mutex:
                             buffered = list(self._queue.queue)
                         for item in buffered:
-                            record_item(recorder, item, self._recording_clocks)
+                            record_item(
+                                recorder,
+                                item,
+                                self._recording_clocks,
+                                self._recording_sources,
+                            )
                         if (failure := self.failure) is not None:
                             recorder.fail(str(failure))
                     self._recorder = recorder
@@ -1208,7 +1285,10 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
             max(0, self._raw.dropped_packets - self._known_lost)
             + self._ignored_on_close
         )
-        if lost:
+        if lost and self._all:
+            if self._recorder is not None:
+                self._recorder.fail("known input loss at recording/close boundary")
+        elif lost:
             self._accept(
                 [
                     self._decoder.loss(
@@ -1233,7 +1313,9 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
                 raise midi.StateError("no recording is attached")
             if not self._recording_stopping:
                 self._final_loss()
-                if self._decoder is not None and self._decoder.pending:
+                if self._decoder is not None and (
+                    self._decoder.pending or self._raw is not None and self._raw.pending
+                ):
                     recorder.fail("recording ended with an unfinished message")
                 self._recording_stopping = True
         return self._finish_recording(recorder, timeout)
@@ -1255,7 +1337,7 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
             if self._raw is None or self._closing and self._raw.closed:
                 return
             with self._lock:
-                self._closing = True
+                self._closing = not self._all
             self._failure = self.failure
             failure: BaseException | None = None
             try:
@@ -1267,6 +1349,7 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
                     self._failure = error
             try:
                 with self._lock:
+                    self._closing = True
                     self._final_loss()
                     if self._decoder is not None:
                         self._accept(list(self._decoder.finish()))
@@ -1315,7 +1398,33 @@ class _InputState[T = messages.Message | events.StreamDiagnostic]:
             recorder.fail("input was abandoned during recording")
 
 
-def record_item(recorder: archive.Recorder, item: object, clocks: set[str]) -> None:
+def record_item(
+    recorder: archive.Recorder,
+    item: object,
+    clocks: set[str],
+    sources: dict[str, events.PortInfo | None],
+) -> None:
+    if (
+        isinstance(item, (messages.Message, events.StreamDiagnostic))
+        and item.stream is not None
+    ):
+        if item.stream not in sources:
+            recorder.record(
+                archive.Stream(
+                    id=item.stream,
+                    label=item.port.name
+                    if isinstance(item, messages.Message) and item.port is not None
+                    else "",
+                )
+            )
+            sources[item.stream] = None
+        if (
+            isinstance(item, messages.Message)
+            and item.port is not None
+            and sources[item.stream] != item.port
+        ):
+            recorder.record(archive._port_record(item.stream, item.port))
+            sources[item.stream] = item.port
     if isinstance(item, messages.Message):
         if item.timestamp is not None and item.timestamp.clock.identity not in clocks:
             recorder.record(item.timestamp.clock)

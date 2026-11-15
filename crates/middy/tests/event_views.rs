@@ -9,6 +9,7 @@ use middy::{
 fn event(message: AnyMessage, ticks: i64) -> Payload {
     (Payload::Message(message))
         .with_metadata(middy::messages::Metadata {
+            port: None,
             stream: Some("s".into()),
             timestamp: Some(Timestamp {
                 ticks,

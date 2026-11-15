@@ -65,6 +65,36 @@ impl<C, N> Managed<C, N> {
         }
         self.client.connect(&self.native, operation)
     }
+    /// Stop and drain a native producer before retiring its Python callback.
+    /// Explicit aggregate-input close uses this to deliver decoder finalization.
+    pub fn close_native(&self) -> PyResult<()> {
+        let mut closed = self.opening.lock().map_err(|_| {
+            self.native.fail(&self.client);
+            failed_error()
+        })?;
+        if !*closed {
+            *closed = true;
+            let result = self.native.close(&self.client, self.teardown);
+            // Queued cleanup retains its reservation until a worker consumes it.
+            if self.native.closed() {
+                let mut state = self.cleanup.load(Ordering::Acquire);
+                while state != QUEUED {
+                    match self.cleanup.compare_exchange_weak(
+                        state,
+                        FINISHED,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    ) {
+                        Ok(_) => break,
+                        Err(current) => state = current,
+                    }
+                }
+            }
+            result
+        } else {
+            self.native.check_failed()
+        }
+    }
 }
 
 impl<C: Send, N: Send> Resource for Managed<C, N> {
@@ -86,33 +116,7 @@ impl<C: Send, N: Send> Resource for Managed<C, N> {
                 }
             }
         }
-        let mut closed = self.opening.lock().map_err(|_| {
-            self.native.fail(&self.client);
-            failed_error()
-        })?;
-        if !*closed {
-            *closed = true;
-            let result = self.native.close(&self.client, self.teardown);
-            // A queued job keeps its reservation until a worker consumes it,
-            // even if an explicit close has already completed its native work.
-            if self.native.closed() {
-                let mut state = self.cleanup.load(Ordering::Acquire);
-                while state != QUEUED {
-                    match self.cleanup.compare_exchange_weak(
-                        state,
-                        FINISHED,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    ) {
-                        Ok(_) => break,
-                        Err(current) => state = current,
-                    }
-                }
-            }
-            result
-        } else {
-            self.native.check_failed()
-        }
+        self.close_native()
     }
 
     fn reserve(&self) -> PyResult<Arc<AtomicU8>> {

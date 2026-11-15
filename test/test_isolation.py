@@ -747,12 +747,111 @@ def test_profile_commands_preserve_types_bytes_and_progress_across_the_worker_pi
         connection.close()
 
 
-def test_typed_input_exposes_receive_drops_without_another_packet(
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("callback", [False, True])
+def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identity(
+    workers: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    raw: bool,
+    callback: bool,
+) -> None:
+    from middy import file_io
+
+    topology = tmp_path / "ports"
+    topology.write_text("")
+    monkeypatch.setenv("MIDDY_TEST_MODE", "hotplug")
+    monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
+    incoming: Queue[object] = Queue()
+    source = midi.Input(raw=raw, run_in_subprocess=True)
+    if callback:
+        source.connect(callback=incoming.put)
+
+    def receive() -> object:
+        return incoming.get(timeout=3) if callback else source.receive(timeout=3)
+
+    with source:
+        assert incoming.empty()
+        if not callback:
+            assert source.receive(timeout=0) is None
+        recorder = None if raw else source.start()
+        topology.write_text("Keyboard\nKeyboard\n")
+        first = receive()
+        second = receive()
+        assert isinstance(first, (messages.Message, events.ReceivedPacket))
+        assert isinstance(second, type(first))
+        if isinstance(first, messages.Message):
+            assert isinstance(second, messages.Message)
+            assert first.port is not None and second.port is not None
+            assert first.port.name == second.port.name == "Keyboard"
+            assert first.port.backend_id == second.port.backend_id == 0
+            assert first.port.identity != second.port.identity
+            assert first.stream != second.stream
+        else:
+            assert isinstance(second, events.ReceivedPacket)
+            assert first.clock != second.clock
+        topology.write_text("")
+        assert isinstance(receive(), events.StreamDiagnostic)
+        assert isinstance(receive(), events.StreamDiagnostic)
+        topology.write_text("Keyboard\n")
+        reconnected = receive()
+        if isinstance(first, messages.Message):
+            assert isinstance(reconnected, messages.Message)
+            assert reconnected.port is not None and first.port is not None
+            assert reconnected.port.identity != first.port.identity
+            source.stop()
+            assert recorder is not None and recorder.records is not None
+            path = tmp_path / "ports.middy"
+            file_io.write(recorder.records, path)
+            with file_io.Reader(path) as reader:
+                saved = [r for r in reader if isinstance(r, messages.Message)]
+            assert [r.port for r in saved] == [
+                first.port,
+                second.port,
+                reconnected.port,
+            ]
+        else:
+            assert isinstance(reconnected, events.ReceivedPacket)
+            assert reconnected.clock != first.clock
+    assert source.closed
+
+
+@pytest.mark.parametrize("callback", [False, True])
+def test_default_input_accepts_a_message_before_initial_attachment_returns(
+    workers: None, monkeypatch: pytest.MonkeyPatch, callback: bool
+) -> None:
+    monkeypatch.setenv("MIDDY_TEST_MODE", "early")
+    incoming: Queue[object] = Queue()
+    source = midi.Input(run_in_subprocess=True)
+    source.connect(callback=incoming.put if callback else None)
+    with source:
+        message = incoming.get(timeout=3) if callback else source.receive(timeout=3)
+        assert isinstance(message, messages.NoteOn)
+        assert message.port is not None and message.port.name == "input port"
+
+
+def test_all_port_recording_detects_a_partial_message_without_a_completed_event(
     workers: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MIDDY_TEST_MODE", "fragment")
+    with midi.Input(run_in_subprocess=True) as source:
+        assert source.receive(timeout=0) is None
+        assert source.last_message_time is not None
+        source.start()
+        report = source.stop()
+        assert not report.complete
+        assert report.failure is not None and "unfinished" in report.failure
+
+
+@pytest.mark.parametrize("all_ports", [False, True])
+def test_typed_input_exposes_receive_drops_without_another_packet(
+    workers: None, monkeypatch: pytest.MonkeyPatch, all_ports: bool
 ) -> None:
     monkeypatch.setenv("MIDDY_TEST_MODE", "native_drop_idle")
     source = midi.Input(run_in_subprocess=True, timeout=1)
-    with source.connect(source.ports()[0]) as connection:
+    with (
+        source.connect() if all_ports else source.connect(source.ports()[0])
+    ) as connection:
         deadline = monotonic() + 3
         while connection.dropped_packets != 7 and monotonic() < deadline:
             sleep(0.01)

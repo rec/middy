@@ -136,13 +136,22 @@ native transport. Inputs and outputs default to in-process
 transport, with `run_in_subprocess=True` available. Inputs
 provide either a callback or `receive(timeout=..., cancel=...)`, returning an
 immutable `messages.Message` or `events.StreamDiagnostic`. Messages carry optional
-`timestamp`, `stream` and `span` fields directly. `replace()` and `transpose()`
+`timestamp`, `stream`, `span` and `port` fields directly. `replace()` and `transpose()`
 preserve this metadata; equality and hashing compare MIDI content only.
 Clocks share their immutable source/timing descriptions. Optional message
 metadata is stored out of line and shared by clones; replacing metadata changes
 only the new message. Plain Python messages retain no metadata allocation.
 Rust `Metadata.stream` uses `Option<Arc<str>>`; `Message::stream()` still returns
 `Option<&str>`, and `with_stream` continues accepting strings.
+By default, `Input()` listens to all visible inputs of the selected backend and
+encoding, checking every 100 ms for newly connected or removed ports. It opens
+even with no devices present. A port pattern or explicit discovery snapshot
+selects one input. Each connection has its own decoder, stream and clock.
+`Message.port` is an optional `PortInfo` description: name, backend, backend ID
+and connection identity. Names and backend IDs need not be unique; the identity
+distinguishes connections and changes on reconnection. Rust exposes the same
+description through `Message::port()`. Port descriptions are shared between
+messages and retained in `.middy` recordings.
 Input channel selection is exact: `Input(channel=1)` excludes messages without a
 channel. Use `Input(channel=(1, None))` to include them, `(None,)` for channel-less
 messages only, or an empty collection for no messages. Omission or `channel=None`

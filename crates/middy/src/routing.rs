@@ -238,7 +238,11 @@ pub struct Router {
 }
 impl Router {
     pub fn boundary(&mut self, source: &str, reason: &str) {
-        if self.routes.iter().any(|r| r.source == source) {
+        if self
+            .routes
+            .iter()
+            .any(|r| crate::events::source_matches(&r.source, Some(source)))
+        {
             self.stop(reason);
         }
     }
@@ -348,7 +352,7 @@ impl Router {
             .routes
             .iter()
             .enumerate()
-            .filter(|(_, r)| r.source == event.stream().unwrap_or_default())
+            .filter(|(_, r)| crate::events::source_matches(&r.source, event.stream()))
         {
             let info = classify(event)?;
             if info.encoding != r.encoding

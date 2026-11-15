@@ -590,6 +590,7 @@ impl Tuning {
         let value = tuning::decode(&sysex).map_err(|e| invalid(0, e))?;
         let event = Payload::Message(AnyMessage::SysEx(sysex))
             .with_metadata(crate::messages::Metadata {
+                port: None,
                 stream: observation.stream.clone().map(Into::into),
                 timestamp: observation
                     .last_timestamp

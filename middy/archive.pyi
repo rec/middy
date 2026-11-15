@@ -6,6 +6,8 @@ from typing import BinaryIO
 
 from . import events, messages, metrics
 
+def _port_record(stream: str, port: events.PortInfo) -> Metadata: ...
+
 class Stream:
     def __init__(
         self, *, id: str, label: str, clock_identity: str | None = None

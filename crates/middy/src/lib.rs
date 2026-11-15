@@ -53,8 +53,8 @@ pub use controls::{
     ControlInterpreter, Controller, ParameterFamily, StepDirection, VelocityInterpreter,
 };
 pub use events::{
-    Cancellation, Clock, ClockMapping, PacketDecoder, PlaybackPlan, PlaybackReport, Rational,
-    ReceivedPacket, SourceSpan, StreamDiagnostic, Timestamp,
+    Cancellation, Clock, ClockMapping, PacketDecoder, PlaybackPlan, PlaybackReport, PortInfo,
+    Rational, ReceivedPacket, SourceSpan, StreamDiagnostic, Timestamp,
 };
 pub use file_io::{write, Reader, Writer};
 pub use gm::{DrumKit, GmMode, Percussion, Program};

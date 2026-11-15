@@ -14,6 +14,7 @@ use crate::state::Client;
 
 #[pyclass(frozen, module = "middy._native")]
 pub struct Input {
+    subprocess: Option<transport::subprocess::SubprocessOptions>,
     state: Arc<Client<transport::Input>>,
     identity: String,
     diagnostics: transport::WorkerDiagnostics,
@@ -40,6 +41,21 @@ impl Input {
     ) -> PyResult<Self> {
         check_blocking_thread()?;
         lifecycle::initialize(py)?;
+        let subprocess = worker_program
+            .map(|program| -> PyResult<_> {
+                Ok(transport::subprocess::SubprocessOptions {
+                    program,
+                    args: worker_args.clone().unwrap_or_default(),
+                    timeout: std::time::Duration::try_from_secs_f64(worker_timeout).map_err(
+                        |_| {
+                            pyo3::exceptions::PyValueError::new_err(
+                                "worker timeout must be finite and nonnegative",
+                            )
+                        },
+                    )?,
+                })
+            })
+            .transpose()?;
         let native = py
             .detach(|| {
                 native_call("create input", || {
@@ -49,20 +65,8 @@ impl Input {
                         timestamps: timestamps.native(),
                         receive_byte_limit,
                     };
-                    if let Some(program) = worker_program {
-                        transport::Input::new_subprocess(
-                            options,
-                            transport::subprocess::SubprocessOptions {
-                                program,
-                                args: worker_args.unwrap_or_default(),
-                                timeout: std::time::Duration::try_from_secs_f64(worker_timeout)
-                                    .map_err(|_| {
-                                        transport::Error::Invalid(
-                                            "worker timeout must be finite and nonnegative".into(),
-                                        )
-                                    })?,
-                            },
-                        )
+                    if let Some(subprocess) = &subprocess {
+                        transport::Input::new_subprocess(options, subprocess.clone())
                     } else {
                         transport::Input::new(options)
                     }
@@ -71,6 +75,7 @@ impl Input {
             .map_err(|e| transport_error(e, "init"))?;
         let diagnostics = native.worker_diagnostics();
         Ok(Self {
+            subprocess,
             diagnostics,
             state: Arc::new(Client::new(native)),
             identity,
@@ -119,6 +124,17 @@ impl Input {
                 )),
             },
         )
+    }
+    #[pyo3(signature=(callback,stream,sysex_limit,raw))]
+    fn listen_all(
+        slf: Py<Self>,
+        py: Python<'_>,
+        callback: Py<PyAny>,
+        stream: String,
+        sysex_limit: usize,
+        raw: bool,
+    ) -> PyResult<Py<AllInputConnection>> {
+        AllInputConnection::open(py, slf, callback, stream, sysex_limit, raw)
     }
     fn create_virtual(
         slf: Py<Self>,
@@ -295,6 +311,172 @@ impl InputConnection {
     }
 }
 impl Drop for InputConnection {
+    fn drop(&mut self) {
+        lifecycle::defer(self.resource.clone());
+    }
+}
+
+#[pyclass(frozen, weakref, module = "middy._native")]
+pub struct AllInputConnection {
+    time_origin: (std::time::Instant, f64),
+    resource: Arc<Managed<transport::Input, transport::all::AllInputConnection>>,
+    client: Py<Input>,
+    clock: OnceLock<Clock>,
+    diagnostics: OnceLock<transport::all::AllDiagnostics>,
+}
+#[pymethods]
+impl AllInputConnection {
+    #[getter]
+    fn pending(&self) -> bool {
+        self.diagnostics.get().is_some_and(|d| d.pending())
+    }
+    fn close(&self, py: Python<'_>) -> PyResult<()> {
+        check_blocking_thread()?;
+        let result = py.detach(|| self.resource.close_native());
+        self.resource.retire();
+        if let Some(callback) = &self.resource.callback {
+            py.detach(|| callback.drain())?;
+        }
+        result
+    }
+    #[getter]
+    fn closed(&self) -> bool {
+        self.resource.native.closed()
+            || self
+                .diagnostics
+                .get()
+                .is_some_and(|d| d.worker_failure().is_some())
+    }
+    #[getter]
+    fn clock(&self) -> PyResult<Clock> {
+        self.clock
+            .get()
+            .cloned()
+            .ok_or_else(|| StateError::new_err("input is not open"))
+    }
+    #[getter]
+    fn dropped_packets(&self) -> u64 {
+        self.diagnostics
+            .get()
+            .map_or(0, |d| d.dropped_packets())
+            .saturating_add(self.resource.callback.as_ref().map_or(0, |c| c.discarded()))
+    }
+    #[getter]
+    fn worker_failure(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.diagnostics
+            .get()
+            .and_then(|d| d.worker_failure())
+            .map(|e| {
+                transport_error(e, "follow MIDI inputs")
+                    .into_value(py)
+                    .into_any()
+            })
+            .or_else(|| self.resource.callback.as_ref().and_then(|c| c.failure(py)))
+    }
+    #[getter]
+    fn last_message_time(&self) -> Option<f64> {
+        self.diagnostics
+            .get()
+            .and_then(|d| d.last_message_time())
+            .map(|t| self.time_origin.1 + t.duration_since(self.time_origin.0).as_secs_f64())
+    }
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.client)?;
+        self.resource.callback.as_ref().unwrap().traverse(visit)
+    }
+    fn __clear__(&self) {
+        self.resource.callback.as_ref().unwrap().clear();
+        lifecycle::defer(self.resource.clone());
+    }
+}
+impl AllInputConnection {
+    fn open(
+        py: Python<'_>,
+        client: Py<Input>,
+        callable: Py<PyAny>,
+        stream: String,
+        sysex_limit: usize,
+        raw: bool,
+    ) -> PyResult<Py<Self>> {
+        let time_origin = (
+            std::time::Instant::now(),
+            pyo3::types::PyModule::import(py, "time")?
+                .getattr("monotonic")?
+                .call0()?
+                .extract::<f64>()?,
+        );
+        check_blocking_thread()?;
+        let callback = Arc::new(Callback::new(py, callable)?);
+        let resource = Arc::new(Managed::new(
+            Arc::clone(&client.get().state),
+            Some(Arc::clone(&callback)),
+            |native: transport::all::AllInputConnection| {
+                native.close().map_err(|e| transport_error(e, "close"))
+            },
+        ));
+        let subprocess = client.get().subprocess.clone();
+        let mode = client.get().mode;
+        let connection = Py::new(
+            py,
+            Self {
+                time_origin,
+                resource: Arc::clone(&resource),
+                client,
+                clock: OnceLock::new(),
+                diagnostics: OnceLock::new(),
+            },
+        )?;
+        lifecycle::register(resource.clone())?;
+        let result = py.detach(|| {
+            resource.connect(|native| {
+                let group_clock = format!("{stream}/clock");
+                let input = native
+                    .connect_all(stream, sysex_limit, raw, subprocess, move |item| {
+                        callback.deliver(move |py| match item {
+                            transport::all::AllItem::Decoded(item) => crate::live::item(py, item),
+                            transport::all::AllItem::Raw(
+                                middy::events::InputItem::Diagnostic(value),
+                                _,
+                            ) => Ok(
+                                Py::new(py, crate::live::StreamDiagnostic { value })?.into_any()
+                            ),
+                            transport::all::AllItem::Raw(
+                                middy::events::InputItem::Message(packet),
+                                clock,
+                            ) => Ok(Py::new(
+                                py,
+                                ReceivedPacket {
+                                    sequence: Some(packet.sequence),
+                                    timestamp_ns: packet.timestamp_ns,
+                                    clock: Clock { value: clock },
+                                    packet: packet.packet,
+                                },
+                            )?
+                            .into_any()),
+                        });
+                    })
+                    .map_err(|e| transport_error(e, "open"))?;
+                connection
+                    .get()
+                    .clock
+                    .set(Clock::native(
+                        group_clock,
+                        Backend::from_native(input.clock().backend),
+                        mode,
+                    ))
+                    .ok();
+                connection.get().diagnostics.set(input.diagnostics()).ok();
+                Ok(input)
+            })
+        });
+        if result.is_err() {
+            resource.retire();
+        }
+        result?;
+        Ok(connection)
+    }
+}
+impl Drop for AllInputConnection {
     fn drop(&mut self) {
         lifecycle::defer(self.resource.clone());
     }

@@ -9,6 +9,7 @@ fn event(source: &str, note: i64) -> events::Payload {
             .unwrap(),
     )))
     .with_metadata(middy::messages::Metadata {
+        port: None,
         stream: Some(source.into()),
         timestamp: None,
         span: None,
@@ -28,6 +29,22 @@ fn route(name: &str, source: &str) -> routing::Route {
         false,
     )
     .unwrap()
+}
+
+#[test]
+fn input_group_routes_its_ports_without_merging_their_provenance() {
+    let mut router = routing::Router::new(vec![route("all", "input")], 8, 1024).unwrap();
+    router.feed(&event("unrelated/port", 59)).unwrap();
+    assert!(router.peek().is_none());
+    for stream in ["input/one", "input/two"] {
+        router.feed(&event(stream, 60)).unwrap();
+        let delivery = router.peek().unwrap();
+        assert_eq!(delivery.event.stream(), Some(stream));
+        let id = delivery.id;
+        router.confirm(id).unwrap();
+    }
+    router.boundary("input/one", "disconnected");
+    assert!(router.snapshot().stopped);
 }
 
 #[test]

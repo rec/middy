@@ -22,6 +22,7 @@ use std::fmt;
 /// Optional provenance. It does not affect message equality, hashing or encoding.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Metadata {
+    pub port: Option<std::sync::Arc<crate::events::PortInfo>>,
     pub timestamp: Option<crate::events::Timestamp>,
     /// Shared source identity. Convert owned strings with `.into()`.
     pub stream: Option<std::sync::Arc<str>>,
@@ -29,6 +30,9 @@ pub struct Metadata {
 }
 impl Metadata {
     pub fn validate(&self) -> Result<(), ValueError> {
+        if self.port.as_ref().is_some_and(|p| p.identity.is_empty()) {
+            return Err(ValueError("empty port identity".into()));
+        }
         if self.stream.as_ref().is_some_and(|s| s.is_empty()) {
             return Err(ValueError("empty source identity".into()));
         }
@@ -68,6 +72,20 @@ pub trait Message: fmt::Debug {
 
     fn timestamp(&self) -> Option<&crate::events::Timestamp> {
         self.metadata().and_then(|m| m.timestamp.as_ref())
+    }
+    fn port(&self) -> Option<&crate::events::PortInfo> {
+        self.metadata().and_then(|m| m.port.as_deref())
+    }
+    fn with_port(
+        self,
+        port: impl Into<std::sync::Arc<crate::events::PortInfo>>,
+    ) -> Result<Self, ValueError>
+    where
+        Self: Sized,
+    {
+        let mut metadata = self.metadata().cloned().unwrap_or_default();
+        metadata.port = Some(port.into());
+        self.with_metadata(metadata)
     }
     fn stream(&self) -> Option<&str> {
         self.metadata().and_then(|m| m.stream.as_deref())

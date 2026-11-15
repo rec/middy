@@ -25,6 +25,7 @@ fn archive_completion_is_separate_from_capture_loss() {
                     .unwrap(),
             )))
             .with_metadata(middy::messages::Metadata {
+                port: None,
                 stream: Some("keys".into()),
                 timestamp: Some(Timestamp {
                     ticks: -3,

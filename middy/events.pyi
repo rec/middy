@@ -4,6 +4,25 @@ from collections.abc import Iterator
 
 from . import messages, metrics, midi
 
+class PortInfo:
+    def __init__(
+        self,
+        *,
+        name: str,
+        backend: midi.Backend,
+        backend_id: int,
+        identity: str | None = None,
+    ) -> None: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def backend(self) -> midi.Backend: ...
+    @property
+    def backend_id(self) -> int: ...
+    @property
+    def identity(self) -> str: ...
+    def __eq__(self, other: object) -> bool: ...
+
 def with_gap[T](items: Iterator[T], gap: float | str) -> Iterator[T | float | str]: ...
 
 class Clock:

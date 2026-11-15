@@ -30,6 +30,7 @@ fn event(raw: SysEx) -> Item {
     Item::Message(Box::new(
         (Payload::Message(middy::messages::AnyMessage::SysEx(raw)))
             .with_metadata(middy::messages::Metadata {
+                port: None,
                 stream: Some("s".into()),
                 timestamp: None,
                 span: None,

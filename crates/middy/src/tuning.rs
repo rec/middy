@@ -976,7 +976,7 @@ impl Query {
             }
             Item::Message(e) => e,
         };
-        if event.stream().unwrap_or_default() != self.stream {
+        if !crate::events::source_matches(&self.stream, event.stream()) {
             self.fail("query received an unrelated source");
             return Ok(());
         }

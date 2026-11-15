@@ -505,6 +505,35 @@ def iterable_input(
         def __init__(self, **settings: object) -> None:
             self.encoding = settings["encoding"]
 
+        def listen_all(
+            self,
+            callback: Callable[[object], object],
+            stream: str,
+            sysex_limit: int,
+            raw: bool,
+        ) -> Connection:
+            decoder = events.PacketDecoder(
+                stream=stream + "/keyboard",
+                encoding=self.encoding,
+                sysex_limit=sysex_limit,
+            )
+            info = events.PortInfo(
+                name=port.name, backend=port.backend, backend_id=port.backend_id
+            )
+
+            def deliver(value: events.ReceivedPacket) -> None:
+                if raw:
+                    callback(value)
+                else:
+                    for item in decoder.feed(value):
+                        callback(
+                            item.replace(port=info)
+                            if isinstance(item, messages.Message)
+                            else item
+                        )
+
+            return self.connect(port, deliver, stream)
+
         def ports(self) -> list[midi.Port]:
             return [port]
 
@@ -527,7 +556,7 @@ def iterable_input(
     return callbacks
 
 
-def test_direct_input_iteration_opens_first_port_and_closes_on_generator_close(
+def test_direct_input_iteration_opens_all_ports_and_closes_on_generator_close(
     iterable_input: list[Callable[[events.ReceivedPacket], object]],
 ) -> None:
     client = midi.Input(run_in_subprocess=False)

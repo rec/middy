@@ -14,7 +14,7 @@ pub use recording::Recording;
 mod api;
 pub use api::{Input, InputErrors, RecordingOptions};
 
-/// Iterate over messages from the first input, reporting diagnostics to stderr.
+/// Iterate over all current and subsequently connected inputs, reporting diagnostics to stderr.
 /// No native client is created until discovery or receiving. Drop closes input.
 /// Use `with_errors` to receive diagnostics and terminal errors explicitly.
 ///
@@ -25,6 +25,9 @@ pub use api::{Input, InputErrors, RecordingOptions};
 /// }
 /// ```
 pub(super) struct Core {
+    all_connection: Option<transport::all::AllInputConnection>,
+    all_diagnostics: Option<transport::all::AllDiagnostics>,
+    all_queue: Arc<(Mutex<AllQueue>, Condvar)>,
     options: transport::InputOptions,
     run_in_subprocess: bool,
     subprocess_options: transport::subprocess::SubprocessOptions,
@@ -60,8 +63,115 @@ impl Default for Core {
     }
 }
 impl Core {
+    fn open_all(&mut self) -> io::Result<()> {
+        self.client()?;
+        let stream = events::fresh_identity("input")?;
+        let queue = Arc::clone(&self.all_queue);
+        let (packets, bytes) = (self.queue.packet_limit, self.queue.byte_limit);
+        let connection = self
+            .client
+            .take()
+            .expect("initialized input")
+            .connect_all(
+                stream.clone(),
+                self.sysex_limit,
+                self.raw,
+                self.run_in_subprocess
+                    .then(|| self.subprocess_options.clone()),
+                move |item| {
+                    let size = all_size(&item);
+                    let mut state = queue.0.lock().unwrap_or_else(|p| p.into_inner());
+                    if state.failed {
+                        return;
+                    }
+                    if state.items.len() >= packets || size > bytes.saturating_sub(state.bytes) {
+                        state.failed = true;
+                        queue.1.notify_all();
+                        return;
+                    }
+                    state.bytes += size;
+                    state.items.push_back(item);
+                    queue.1.notify_all();
+                },
+            )
+            .map_err(transport_error)?;
+        let native_clock = connection.clock();
+        let enabled = native_clock.mode == transport::TimestampMode::Absolute;
+        self.clock = Some(
+            Clock::new(
+                format!("{stream}/clock"),
+                1,
+                1_000_000_000,
+                if enabled {
+                    "backend_absolute"
+                } else {
+                    "disabled"
+                }
+                .into(),
+                None,
+            )?
+            .with_transport(native_clock.backend as i32, enabled),
+        );
+        self.decoder = Some(Decoder::new(
+            stream.clone(),
+            self.options.encoding,
+            self.sysex_limit,
+        )?);
+        self.stream = Some(stream);
+        self.native_clock = Some(native_clock);
+        self.all_diagnostics = Some(connection.diagnostics());
+        self.all_connection = Some(connection);
+        Ok(())
+    }
+    fn next_all(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Option<io::Result<transport::all::AllItem>> {
+        loop {
+            {
+                let mut state = self.all_queue.0.lock().unwrap_or_else(|p| p.into_inner());
+                if let Some(item) = state.items.pop_front() {
+                    state.bytes -= all_size(&item);
+                    return Some(Ok(item));
+                }
+                if state.failed {
+                    return Some(Err(invalid("input receive queue overflowed")));
+                }
+            }
+            if let Err(error) = self.check_health() {
+                return Some(Err(error.into()));
+            }
+            if self.closed || deadline.is_some_and(|d| Instant::now() >= d) {
+                return None;
+            }
+            let state = self.all_queue.0.lock().unwrap_or_else(|p| p.into_inner());
+            if !state.items.is_empty() || state.failed {
+                continue;
+            }
+            let wait = deadline.map_or(Duration::from_millis(50), |d| {
+                d.saturating_duration_since(Instant::now())
+                    .min(Duration::from_millis(50))
+            });
+            drop(
+                self.all_queue
+                    .1
+                    .wait_timeout(state, wait)
+                    .unwrap_or_else(|p| p.into_inner()),
+            );
+        }
+    }
     pub fn new() -> Self {
         Self {
+            all_connection: None,
+            all_diagnostics: None,
+            all_queue: Arc::new((
+                Mutex::new(AllQueue {
+                    items: VecDeque::new(),
+                    bytes: 0,
+                    failed: false,
+                }),
+                Condvar::new(),
+            )),
             options: transport::InputOptions::default(),
             run_in_subprocess: false,
             subprocess_options: Default::default(),
@@ -109,7 +219,7 @@ impl Core {
     }
     /// Select a unique case-sensitive substring or shell name pattern, including brackets.
     pub fn with_port(mut self, pattern: impl Into<String>) -> crate::midi::Result<Self> {
-        if self.connection.is_some() || self.closed {
+        if self.connection.is_some() || self.all_connection.is_some() || self.closed {
             return Err(invalid("input is connected or closed").into());
         }
         let pattern = pattern.into();
@@ -120,7 +230,11 @@ impl Core {
         Ok(self)
     }
     pub fn with_run_in_subprocess(mut self, enabled: bool) -> crate::midi::Result<Self> {
-        if self.client.is_some() || self.connection.is_some() || self.closed {
+        if self.client.is_some()
+            || self.connection.is_some()
+            || self.all_connection.is_some()
+            || self.closed
+        {
             return Err(invalid("configure subprocess before discovery or connection").into());
         }
         self.run_in_subprocess = enabled;
@@ -130,7 +244,11 @@ impl Core {
         mut self,
         options: transport::subprocess::SubprocessOptions,
     ) -> crate::midi::Result<Self> {
-        if self.client.is_some() || self.connection.is_some() || self.closed {
+        if self.client.is_some()
+            || self.connection.is_some()
+            || self.all_connection.is_some()
+            || self.closed
+        {
             return Err(invalid("configure subprocess before discovery or connection").into());
         }
         if options.timeout.is_zero()
@@ -144,7 +262,11 @@ impl Core {
         Ok(self)
     }
     pub fn with_transport(mut self, options: transport::InputOptions) -> crate::midi::Result<Self> {
-        if self.client.is_some() || self.connection.is_some() || self.closed {
+        if self.client.is_some()
+            || self.connection.is_some()
+            || self.all_connection.is_some()
+            || self.closed
+        {
             return Err(invalid("configure transport before discovery or connection").into());
         }
         self.options = options;
@@ -158,7 +280,7 @@ impl Core {
         bytes: usize,
         sysex: usize,
     ) -> crate::midi::Result<Self> {
-        if self.connection.is_some() || self.closed {
+        if self.connection.is_some() || self.all_connection.is_some() || self.closed {
             return Err(invalid("configure limits before connection").into());
         }
         if packets == 0 || bytes == 0 || sysex == 0 {
@@ -181,6 +303,9 @@ impl Core {
         Ok(self.stream.as_deref().expect("opened input stream"))
     }
     pub fn dropped_packets(&self) -> u64 {
+        if let Some(connection) = &self.all_connection {
+            return connection.dropped_packets();
+        }
         let queued = self
             .queue
             .state
@@ -196,6 +321,13 @@ impl Core {
     pub fn check_health(&self) -> crate::midi::Result<()> {
         if self.closed {
             return Err(invalid("input is closed").into());
+        }
+        if let Some(error) = self
+            .all_connection
+            .as_ref()
+            .and_then(|c| c.worker_failure())
+        {
+            return Err(crate::midi::Error::Transport(error));
         }
         if let Some(connection) = &self.connection {
             connection
@@ -215,6 +347,50 @@ impl Core {
             return Ok(());
         }
         self.closed = true;
+        if let Some(connection) = self.all_connection.take() {
+            let diagnostics = connection.diagnostics();
+            let result = connection
+                .close()
+                .map(drop)
+                .map_err(crate::midi::Error::Transport);
+            self.native_dropped = diagnostics.dropped_packets();
+            self.queue
+                .state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .last_message_time = diagnostics.last_message_time();
+            loop {
+                let item = self
+                    .all_queue
+                    .0
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .items
+                    .pop_front();
+                match item {
+                    Some(transport::all::AllItem::Decoded(item)) => self.accept_item(item),
+                    Some(transport::all::AllItem::Raw(item, _)) => {
+                        self.raw_pending.push_back(Ok(item))
+                    }
+                    None => break,
+                }
+            }
+            let failed = self
+                .all_queue
+                .0
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .failed;
+            if failed {
+                if let Some(recording) = &self.recording {
+                    recording
+                        .recorder
+                        .fail("input receive queue overflowed".into());
+                }
+                return Err(invalid("input receive queue overflowed").into());
+            }
+            return result;
+        }
         let mut lost = 0;
         let result = if let Some(connection) = self.connection.take() {
             let diagnostics = connection.diagnostics();
@@ -269,7 +445,7 @@ impl Core {
         result.map_err(crate::midi::Error::from)
     }
     fn client(&mut self) -> io::Result<&transport::Input> {
-        if self.closed || self.connection.is_some() {
+        if self.closed || self.connection.is_some() || self.all_connection.is_some() {
             return Err(invalid("input is connected or closed"));
         }
         if self.client.is_none() {
@@ -320,13 +496,21 @@ impl Core {
             )?
             .with_transport(native_clock.backend as i32, enabled),
         );
-        self.decoder = Some(decoder);
+        let port_info = crate::events::PortInfo::new(
+            port.map_or(name, Port::name).into(),
+            native_clock.backend,
+            port.map_or(0, Port::backend_id),
+        )?;
+        self.decoder = Some(decoder.with_port(port_info));
         self.stream = Some(stream);
         self.connection = Some(connection);
         Ok(())
     }
     fn open(&mut self) -> io::Result<()> {
         if self.decoder.is_none() && !self.closed {
+            if self.port.is_none() {
+                return self.open_all();
+            }
             let ports = self.ports()?;
             let port = select_port(&ports, self.port.as_deref())?;
             self.open_connection(Some(port), "")?;
@@ -361,6 +545,13 @@ impl Core {
         }
     }
     fn accept_item(&mut self, item: Item) {
+        if self.all_diagnostics.is_some() {
+            if let Item::Diagnostic(diagnostic) = &item {
+                if diagnostic.kind == DiagnosticKind::Loss {
+                    self.reported_loss = self.reported_loss.saturating_add(diagnostic.lost);
+                }
+            }
+        }
         if let (Some(mask), Item::Message(message)) = (self.channels, &item) {
             match crate::routing::classify(message) {
                 Ok(info) if mask & (1 << info.channel.map_or(16, |c| c - 1)) == 0 => return,
@@ -406,6 +597,14 @@ impl Core {
         if let Err(error) = self.open() {
             return Some(Err(error));
         }
+        if self.all_connection.is_some() {
+            return self.next_all(deadline).map(|r| {
+                r.and_then(|item| match item {
+                    transport::all::AllItem::Raw(item, _) => Ok(item),
+                    _ => Err(invalid("decoded event in raw input")),
+                })
+            });
+        }
         loop {
             if let Some(item) = self.raw_pending.pop_front() {
                 return Some(item);
@@ -434,6 +633,17 @@ impl Core {
                     return Some(item);
                 }
                 return Some(item);
+            }
+            if self.all_connection.is_some() {
+                match self.next_all(deadline)? {
+                    Ok(transport::all::AllItem::Decoded(item)) => self.accept_item(item),
+                    Ok(_) => return Some(Err(invalid("raw event in decoded input"))),
+                    Err(error) => {
+                        let _ = self.close();
+                        return Some(Err(error));
+                    }
+                }
+                continue;
             }
             match self.next_ingress(deadline)? {
                 Ok(IngressItem::Packet(packet)) => self.decode(packet),
@@ -504,6 +714,26 @@ impl Core {
                     .unwrap_or_else(|p| p.into_inner()),
             );
         }
+    }
+}
+struct AllQueue {
+    items: VecDeque<transport::all::AllItem>,
+    bytes: usize,
+    failed: bool,
+}
+fn all_size(item: &transport::all::AllItem) -> usize {
+    match item {
+        transport::all::AllItem::Decoded(Item::Message(message)) => match message.as_ref() {
+            Payload::Message(message) => message.encoded_len(),
+            Payload::Ump(message) => crate::ump::encode(message).map_or(16, |w| w.len() * 4),
+            Payload::Command(_) => 64,
+        },
+        transport::all::AllItem::Raw(Item::Message(packet), _) => match &packet.packet {
+            Packet::Bytes(v) => v.len(),
+            Packet::Ump(v) => v.len() * 4,
+        },
+        transport::all::AllItem::Decoded(Item::Diagnostic(d))
+        | transport::all::AllItem::Raw(Item::Diagnostic(d), _) => d.reason.len(),
     }
 }
 impl Iterator for Core {

@@ -24,14 +24,26 @@ md.Output(bpm='120 bpm').send(
 )
 ```
 
-## 3. Listen to an input
+## 3. Listen to all inputs
 
 ```python
 import middy as md
 
 for message in md.Input():
-    print(message)
+    print(message.port, message)
 ```
+
+`Input()` listens to all inputs exposed by the selected backend and encoding,
+including devices connected after opening. It can open with no devices present;
+discovery runs every 100 ms. Use `Input(port='Keyboard')` to select a unique name
+or pattern, or connect one snapshot returned by `input.ports()`.
+
+Live messages have an immutable `port` description with `name`, `backend`,
+`backend_id` and `identity`. Names and backend IDs can be duplicated. `identity`
+distinguishes connections and changes on reconnection; it is not a permanent
+hardware ID. Each port has its own stream, clock and decoder. `.middy` recordings
+retain these descriptions. Constructed messages and files without port metadata
+have `port=None`.
 
 ## 4. Transpose a keyboard up an octave
 
@@ -274,7 +286,7 @@ for report fields and options.
 
 ## Live routing with progress reports
 
-For a managed route, forward ten seconds from the first input to the first output,
+For a managed route, forward ten seconds from all inputs to the first output,
 remapping channel messages to channel 2:
 
 ```python
@@ -309,7 +321,7 @@ def show(entry: md.inspection.MonitorEntry) -> None:
     print(entry.message or entry.diagnostic or entry.transport_drop_total)
 
 
-with md.Input() as source:
+with md.Input(port='Keyboard') as source:
     monitor = md.Monitor(stream=source.stream, clock=source.clock)
     print(md.inspection.run(monitor, source, duration=10, callback=show, metrics=True))
 ```
@@ -447,7 +459,7 @@ remain separate until explicitly assembled. MIDI 2-only musical classes live in
 
 ## Interpret controller gestures
 
-Move a high-resolution controller or send RPN/NRPN changes from the first input.
+Select your input by name, then move a high-resolution controller or send RPN/NRPN changes.
 The interpreter combines the contributing MIDI 1 messages and reports what was
 observed. It also accepts plain messages without source or timing metadata.
 For example, CC 99=1 and CC 98=2 select NRPN 130. A later CC 98=3
@@ -484,7 +496,7 @@ Snapshots are frozen. Missing cached data returns `None`; missing components use
 import middy as md
 
 interpreter = md.ControlInterpreter()
-with md.Input() as source:
+with md.Input(port='Keyboard') as source:
     for message in source.with_errors():
         if isinstance(message, Exception):
             raise message
@@ -503,14 +515,14 @@ is not performed by these interpreters.
 
 ## Track MPE notes and expression
 
-Track the first input using a lower MPE zone. The tracker reports observations
+Track one named input using a lower MPE zone. The tracker reports observations
 with optional source/timing metadata; `snapshot()` returns current channel state.
 
 ```python
 import middy as md
 
 tracker = md.mpe.Tracker(zone=md.ZoneConfiguration(manager_channel=1, members=2))
-for message in md.Input():
+for message in md.Input(port='Keyboard'):
     for observation in tracker.feed(message):
         print(observation)
 ```
@@ -560,7 +572,7 @@ from time import monotonic_ns
 import middy as md
 
 assembler = md.timecode.Assembler(timeout='100 ms')
-for message in md.Input():
+for message in md.Input(port='Keyboard'):
     for observation in assembler.feed(message, now_ns=monotonic_ns()):
         print(observation)
 ```

@@ -86,6 +86,13 @@ fn main() {
             }
             "ports" => {
                 snapshot += 1;
+                if mode == "hotplug" {
+                    let path = std::env::args().nth(2)
+                        .or_else(|| std::env::var("MIDDY_TEST_PORTS").ok()).unwrap();
+                    let ports = std::fs::read_to_string(path).unwrap();
+                    ok("ok", Value::List(ports.lines().map(|name| Value::Tuple(vec![text(name), i(0)])).collect()), dropped);
+                    continue;
+                }
                 if mode == "discovery_error_once" && snapshot == 1 {
                     error(
                         "native",
@@ -134,9 +141,11 @@ fn main() {
                 }
                 if matches!(
                     mode.as_str(),
-                    "early" | "early_negative" | "early_absent" | "twice" | "burst"
+                    "early" | "early_negative" | "early_absent" | "twice" | "burst" | "hotplug" | "fragment"
                 ) {
-                    let data = if ump {
+                    let data = if mode == "fragment" {
+                        Value::Bytes(vec![0xf0, 0x7d, 1])
+                    } else if ump {
                         Value::Words(vec![0x40903c00, 0xc0000000])
                     } else {
                         Value::Bytes(vec![0x90, 60, 127])

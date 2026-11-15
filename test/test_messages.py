@@ -237,11 +237,12 @@ def test_note_transposition_clamps_and_preserves_channel_and_velocity() -> None:
 
 
 def test_transformations_preserve_metadata_and_payload_identity() -> None:
-    from middy import codecs, events
+    from middy import codecs, events, midi
 
     clock = events.Clock(identity="capture")
     timestamp = events.Timestamp(ticks=12, clock=clock)
     span = events.SourceSpan(first_packet=1, last_packet=1)
+    port = events.PortInfo(name="Keyboard", backend=midi.Backend.CoreMidi, backend_id=1)
     for m in [
         messages.NoteOn(60, channel=2),
         messages.SysEx(b"\x7d\x01"),
@@ -249,22 +250,27 @@ def test_transformations_preserve_metadata_and_payload_identity() -> None:
         messages.ProgramChange(12, channel=2, bank_msb=0, bank_lsb=0),
         messages.NoteOn(60, channel=2).replace(group=1),
     ]:
-        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span)
+        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span, port=port)
         assert tagged == m and hash(tagged) == hash(m)
         assert tagged.replace().timestamp == timestamp
         assert tagged.replace().stream == "keyboard"
         assert tagged.replace().span == span
+        assert tagged.replace().port == port
         assert m.timestamp is None and m.stream is None and m.span is None
-        cleared = tagged.replace(timestamp=None, stream=None, span=None)
+        assert m.port is None
+        assert m.replace(port=port).port == port
+        cleared = tagged.replace(timestamp=None, stream=None, span=None, port=None)
+        assert cleared.port is None
         assert (
             cleared.timestamp is None
             and cleared.stream is None
             and cleared.span is None
         )
     for m in [messages.NoteOn(120, channel=2), messages.NoteOff(120, channel=2)]:
-        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span)
+        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span, port=port)
         changed = tagged.transpose(12).replace(velocity=33)
         assert changed.note == 127 and changed.velocity == 33
+        assert changed.port == port
         assert (changed.timestamp, changed.stream, changed.span) == (
             timestamp,
             "keyboard",

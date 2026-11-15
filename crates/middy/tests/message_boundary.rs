@@ -225,6 +225,7 @@ fn complete_sysex7_translation_keeps_archive_provenance() {
         clock: clock.clone(),
     };
     let metadata = Metadata {
+        port: None,
         stream: Some("keys".into()),
         timestamp: Some(timestamp.clone()),
         span: Some(SourceSpan {

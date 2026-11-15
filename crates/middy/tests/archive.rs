@@ -29,6 +29,7 @@ fn records() -> Vec<Record> {
                     .unwrap(),
             )))
             .with_metadata(middy::messages::Metadata {
+                port: None,
                 stream: Some("source".into()),
                 timestamp: Some(Timestamp {
                     ticks: i64::MIN,
@@ -70,6 +71,7 @@ fn fourteen_bit_controller_retains_the_existing_command_encoding_and_budget() {
         .with_channel(2)
         .unwrap();
     let metadata = Metadata {
+        port: None,
         stream: Some("source".into()),
         ..Metadata::default()
     };

@@ -55,6 +55,16 @@ A long-running capture that exhausts these bounds must start another archive.
 
 ## Message representations
 
+Port provenance uses a Metadata record with key `middy.port`, an explicit stream,
+and no timestamp. Its data is version byte 1, a length-prefixed UTF-8 connection
+identity, a length-prefixed UTF-8 port name, the backend number as u64, and the
+backend port ID as u64, all integers big endian. Backend numbers match the
+transport backend IDs. The identity must be nonempty. A stream's description
+cannot change. This metadata precedes its events and restores `Message.port`
+when reading. The writer emits it automatically for events carrying a port.
+Port identity and name bytes count toward the descriptor byte limit. It does
+not change MIDI payload encoding or message equality.
+
 1. Group byte (0 means absent, otherwise 1..16), then one complete primitive MIDI 1 message, including status and SysEx F0/F7
    framing. It is not a running-status stream or a sequence of commands.
 2. Exactly one UMP packet value (one to four words), serialized big endian.

@@ -36,6 +36,92 @@ fn options(mode: &str) -> SubprocessOptions {
     }
 }
 #[test]
+fn all_port_recording_marks_pending_fragments_incomplete_without_completed_messages() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(options("fragment"))
+        .unwrap();
+    let recorder = input
+        .start(None::<&std::path::Path>, &Default::default())
+        .unwrap();
+    assert!(input.last_message_time().is_some());
+    let report = input.stop(Duration::from_secs(1)).unwrap();
+    assert!(!report.complete);
+    assert!(report.failure.unwrap().contains("unfinished"));
+    assert!(recorder.records().is_some());
+    input.close().unwrap();
+}
+
+#[test]
+fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings() {
+    use middy::{archive, events::InputItem, messages::Message};
+    let _serial = SERIAL.lock().unwrap();
+    let path = fixture().with_extension("ports");
+    std::fs::write(&path, "").unwrap();
+    let mut worker = options("hotplug");
+    worker.args.push(path.clone().into_os_string());
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap();
+    assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
+    let recorder = input
+        .start(None::<&std::path::Path>, &Default::default())
+        .unwrap();
+    std::fs::write(&path, "Keyboard\nKeyboard\n").unwrap();
+    let mut ports = Vec::new();
+    for _ in 0..2 {
+        let InputItem::Message(message) = input
+            .receive(Some(Duration::from_secs(3)), None)
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("message expected")
+        };
+        let port = message.port().unwrap().clone();
+        assert_eq!(port.name, "Keyboard");
+        ports.push(port);
+    }
+    assert_ne!(ports[0].identity, ports[1].identity);
+    assert!(input.last_message_time().is_some());
+    std::fs::write(&path, "").unwrap();
+    for _ in 0..2 {
+        assert!(matches!(
+            input.receive(Some(Duration::from_secs(3)), None).unwrap(),
+            Some(InputItem::Diagnostic(_))
+        ));
+    }
+    std::fs::write(&path, "Keyboard\n").unwrap();
+    let Some(InputItem::Message(message)) =
+        input.receive(Some(Duration::from_secs(3)), None).unwrap()
+    else {
+        panic!("reconnected input expected")
+    };
+    assert!(!ports.contains(message.port().unwrap()));
+    ports.push(message.port().unwrap().clone());
+    input.close().unwrap();
+    assert!(input.last_message_time().is_some());
+    let records = recorder.records().unwrap();
+    let mut bytes = Vec::new();
+    let mut writer = archive::Writer::new(&mut bytes, 1_048_576).unwrap();
+    for record in records {
+        writer.write(&record).unwrap();
+    }
+    writer.finish(true, "").unwrap();
+    drop(writer);
+    let saved: Vec<_> = archive::Reader::new(std::io::Cursor::new(bytes), 1_048_576, false, true)
+        .unwrap()
+        .filter_map(|r| match r.unwrap() {
+            archive::Record::Event(m) => m.port().cloned(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(saved, ports);
+}
+#[test]
 fn high_level_input_and_output_use_the_shared_worker_without_python() {
     let _serial = SERIAL.lock().unwrap();
     let mut output = Output::new()

@@ -36,6 +36,7 @@ pub(crate) fn with_metadata(
     let metadata = message.metadata();
     let value = payload
         .with_metadata(middy::messages::Metadata {
+            port: metadata.and_then(|m| m.port.clone()),
             stream: metadata.and_then(|m| m.stream.clone()),
             timestamp: metadata.and_then(|m| m.timestamp.clone()),
             span: metadata.and_then(|m| m.span.clone()),
@@ -76,6 +77,7 @@ pub fn to_python(py: Python<'_>, v: model::Payload) -> PyResult<Py<PyAny>> {
         .bind(py)
         .extract::<PyRef<'_, crate::messages::Message>>()?
         .attach(Some(std::sync::Arc::new(crate::messages::Metadata {
+            port: metadata.port,
             timestamp: metadata.timestamp,
             stream: metadata.stream,
             span: metadata.span,
@@ -99,6 +101,7 @@ fn int128(v: &Bound<'_, PyAny>) -> PyResult<i128> {
         .map_err(|_| PyValueError::new_err("integer must fit signed 128 bits"))
 }
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<crate::ports::PortInfo>()?;
     m.add_class::<Timestamp>()?;
     m.add_class::<SourceSpan>()?;
     m.add_class::<Rational>()

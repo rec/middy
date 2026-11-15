@@ -30,6 +30,7 @@ fn event(ticks: i64) -> Payload {
             .unwrap(),
     )))
     .with_metadata(middy::messages::Metadata {
+        port: None,
         stream: Some("s".into()),
         timestamp: Some(Timestamp {
             ticks,
@@ -41,7 +42,10 @@ fn event(ticks: i64) -> Payload {
 }
 #[test]
 fn completion_timestamps_and_spans_survive_realtime_and_running_status() {
-    let mut d = Decoder::new("s".into(), Encoding::Bytes, 1024).unwrap();
+    let port = middy::PortInfo::new("Keyboard".into(), middy::Backend::CoreMidi, 1).unwrap();
+    let mut d = Decoder::new("s".into(), Encoding::Bytes, 1024)
+        .unwrap()
+        .with_port(port);
     assert!(d
         .feed(&Packet::Bytes(vec![0x90, 60]), &clock(), Some(10), Some(0))
         .unwrap()
@@ -69,6 +73,10 @@ fn completion_timestamps_and_spans_survive_realtime_and_running_status() {
     assert!(Arc::ptr_eq(
         e.metadata().unwrap().stream.as_ref().unwrap(),
         running.metadata().unwrap().stream.as_ref().unwrap(),
+    ));
+    assert!(Arc::ptr_eq(
+        e.metadata().unwrap().port.as_ref().unwrap(),
+        running.metadata().unwrap().port.as_ref().unwrap(),
     ));
     assert!(d.finish().is_empty());
 }

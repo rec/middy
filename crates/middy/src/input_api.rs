@@ -24,6 +24,8 @@ type Callback<T> = Box<dyn FnMut(midi::Result<Item<T>>) + Send>;
 type Receive<T> = fn(&mut Core, Option<Instant>) -> Option<io::Result<Item<T>>>;
 
 /// A lazy input yielding decoded messages; raw() selects unchanged packets.
+/// By default it follows all visible ports of the selected backend/encoding,
+/// including ports connected later. with_port or connect selects one port.
 /// Callbacks and attached recording use the same bounded background dispatcher.
 /// Raw input has no decoded recording or channel-filtering methods.
 /// ```no_run
@@ -391,6 +393,9 @@ impl<T: Send + 'static> Input<T> {
     /// Host ingress activity, independent of channel filters and consumers.
     pub fn last_message_time(&self) -> Option<Instant> {
         let core = self.core.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(connection) = &core.all_connection {
+            return connection.diagnostics().last_message_time();
+        }
         let value = core
             .queue
             .state

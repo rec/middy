@@ -14,6 +14,7 @@ fn live_observer_reuses_timing_without_double_counting_loss_counters() {
     let e = Item::Message(Box::new(
         (Payload::Message(AnyMessage::TimingClock(TimingClock::new().unwrap())))
             .with_metadata(crate::messages::Metadata {
+                port: None,
                 stream: Some("s".into()),
                 timestamp: None,
                 span: None,

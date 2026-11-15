@@ -433,3 +433,33 @@ pub(crate) fn fresh_identity(kind: &str) -> io::Result<String> {
         }
     }
 }
+pub(crate) fn source_matches(input: &str, source: Option<&str>) -> bool {
+    source.is_some_and(|source| {
+        source == input
+            || source
+                .strip_prefix(input)
+                .is_some_and(|s| s.starts_with('/'))
+    })
+}
+/// Descriptive source identity, independent of discovery handles and clients.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PortInfo {
+    pub identity: String,
+    pub name: String,
+    pub backend: crate::transport::Backend,
+    pub backend_id: u64,
+}
+impl PortInfo {
+    pub fn new(
+        name: String,
+        backend: crate::transport::Backend,
+        backend_id: u64,
+    ) -> std::io::Result<Self> {
+        Ok(Self {
+            identity: fresh_identity("port")?,
+            name,
+            backend,
+            backend_id,
+        })
+    }
+}

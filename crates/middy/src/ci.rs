@@ -1793,7 +1793,7 @@ pub fn browse_with(
                     break;
                 }
             };
-            if message.stream() != Some(route.input()) {
+            if !crate::events::source_matches(route.input(), message.stream()) {
                 browser.stop("received event from an unrelated stream");
                 break;
             }

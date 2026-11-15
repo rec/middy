@@ -6,6 +6,8 @@
 //! Input is raw transport data; byte packets can contain partial SysEx and need
 //! a bounded stream decoder before being treated as complete musical messages.
 
+#[doc(hidden)]
+pub mod all;
 mod ffi;
 mod native;
 pub mod subprocess;
@@ -79,7 +81,7 @@ pub enum Encoding {
     Ump,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum Backend {
     CoreMidi = 1,

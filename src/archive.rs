@@ -246,6 +246,7 @@ impl Writer {
     }
 }
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(port_record, m)?)?;
     m.add_class::<Stream>()?;
     m.add_class::<Gap>()?;
     m.add_class::<Discontinuity>()?;
@@ -253,4 +254,15 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Opaque>()?;
     m.add_class::<Reader>()?;
     m.add_class::<Writer>()
+}
+#[pyfunction(name = "_port_record")]
+fn port_record(
+    py: Python<'_>,
+    stream: &str,
+    port: PyRef<'_, crate::ports::PortInfo>,
+) -> PyResult<Py<PyAny>> {
+    to_python(
+        py,
+        model::port_record(stream, &port.value).map_err(os_error)?,
+    )
 }

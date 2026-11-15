@@ -3,6 +3,63 @@ use pyo3::prelude::*;
 
 use crate::packets::Backend;
 
+#[pyclass(frozen, module = "middy.events")]
+pub struct PortInfo {
+    pub value: std::sync::Arc<middy::events::PortInfo>,
+}
+#[pymethods]
+impl PortInfo {
+    #[new]
+    #[pyo3(signature=(*,name,backend,backend_id,identity=None))]
+    fn new(
+        name: String,
+        backend: Backend,
+        backend_id: u64,
+        identity: Option<String>,
+    ) -> PyResult<Self> {
+        let mut value = middy::events::PortInfo::new(name, backend.native(), backend_id)
+            .map_err(crate::files::os_error)?;
+        if let Some(identity) = identity {
+            if identity.is_empty() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "empty port identity",
+                ));
+            }
+            value.identity = identity;
+        }
+        Ok(Self {
+            value: value.into(),
+        })
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        &self.value.name
+    }
+    #[getter]
+    fn identity(&self) -> &str {
+        &self.value.identity
+    }
+    #[getter]
+    fn backend(&self) -> Backend {
+        Backend::from_native(self.value.backend)
+    }
+    #[getter]
+    fn backend_id(&self) -> u64 {
+        self.value.backend_id
+    }
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        other
+            .extract::<PyRef<'_, Self>>()
+            .is_ok_and(|p| p.value == self.value)
+    }
+    fn __repr__(&self) -> String {
+        format!(
+            "PortInfo(name={:?}, backend={:?}, backend_id={}, identity={:?})",
+            self.value.name, self.value.backend, self.value.backend_id, self.value.identity
+        )
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature=(ports, pattern, direction))]
 pub(crate) fn select_port(

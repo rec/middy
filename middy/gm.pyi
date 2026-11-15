@@ -20,6 +20,7 @@ class GmMode(messages.Message):
         timestamp: events.Timestamp | None = ...,
         stream: str | None = ...,
         span: events.SourceSpan | None = ...,
+        port: events.PortInfo | None = ...,
     ) -> GmMode: ...
 
 class Program:
