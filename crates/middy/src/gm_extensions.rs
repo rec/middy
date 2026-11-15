@@ -3,7 +3,7 @@ use crate::messages::{PrimitiveMessage, SysEx, ValueError};
 
 #[derive(Clone, Debug)]
 pub struct ControllerDestination {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     pub(crate) device_id: u8,
     pub(crate) channel: u8,
     pub(crate) source: u8,
@@ -72,7 +72,7 @@ impl PrimitiveMessage for ControllerDestination {
 }
 #[derive(Clone, Debug)]
 pub struct KeyBasedControl {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     channel: u8,
     note: u8,
@@ -134,7 +134,7 @@ impl PrimitiveMessage for KeyBasedControl {
 /// support all protocol widths without overflowing machine-sized integers.
 #[derive(Clone, Debug)]
 pub struct GlobalParameterControl {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     slot_path: Vec<u16>,
     parameter_width: u8,

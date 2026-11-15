@@ -129,7 +129,7 @@ impl std::hash::Hash for Record {
 #[derive(Default)]
 struct Registry {
     clocks: BTreeMap<String, Clock>,
-    streams: BTreeMap<String, (String, Option<String>)>,
+    streams: BTreeMap<std::sync::Arc<str>, (String, Option<String>)>,
     bytes: usize,
     records: u64,
 }
@@ -190,7 +190,7 @@ impl Registry {
                 clock_identity,
             } => {
                 if id.is_empty()
-                    || self.streams.contains_key(id)
+                    || self.streams.contains_key(id.as_str())
                     || self.clocks.len() + self.streams.len() >= 128
                 {
                     return Err(invalid(
@@ -210,7 +210,7 @@ impl Registry {
                 }
                 self.bytes += n;
                 self.streams
-                    .insert(id.clone(), (label.clone(), clock_identity.clone()));
+                    .insert(id.as_str().into(), (label.clone(), clock_identity.clone()));
             }
             Record::Event(e) => {
                 self.check_event_header(e.stream().unwrap_or_default(), e.timestamp(), e.span())?;
@@ -220,7 +220,7 @@ impl Registry {
             } => {
                 if stream
                     .as_ref()
-                    .is_some_and(|s| !self.streams.contains_key(s))
+                    .is_some_and(|s| !self.streams.contains_key(s.as_str()))
                 {
                     return Err(invalid(0, "metadata stream is undeclared"));
                 }
@@ -235,7 +235,7 @@ impl Registry {
                     }
                     if stream
                         .as_ref()
-                        .and_then(|s| self.streams.get(s))
+                        .and_then(|s| self.streams.get(s.as_str()))
                         .and_then(|s| s.1.as_ref())
                         .is_some_and(|id| id != t.clock.identity())
                     {
@@ -244,7 +244,7 @@ impl Registry {
                 }
             }
             Record::Gap { stream, .. } | Record::Discontinuity { stream, .. }
-                if !self.streams.contains_key(stream) =>
+                if !self.streams.contains_key(stream.as_str()) =>
             {
                 return Err(invalid(0, "diagnostic stream is undeclared"));
             }
@@ -686,13 +686,20 @@ fn decode(body: &[u8], registry: &Registry, preserve: bool) -> io::Result<Record
                     return Err(invalid(0, "unknown message representation"));
                 }
             };
-            Record::Event(Box::new((message).with_metadata(
-                crate::messages::Metadata {
-                    stream: Some(stream),
+            Record::Event(Box::new(
+                (message).with_metadata(crate::messages::Metadata {
+                    stream: Some(
+                        registry
+                            .streams
+                            .get_key_value(stream.as_str())
+                            .ok_or_else(|| invalid(0, "event stream is undeclared"))?
+                            .0
+                            .clone(),
+                    ),
                     timestamp,
                     span,
-                },
-            )?))
+                })?,
+            ))
         }
         4 => Record::Gap {
             stream: f.string()?,

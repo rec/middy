@@ -223,7 +223,7 @@ pub enum Body {
 }
 #[derive(Clone, Debug)]
 pub struct Management {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     header: Header,
     body: Body,
     extensions: Vec<u8>,

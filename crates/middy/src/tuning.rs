@@ -271,7 +271,7 @@ pub struct ScaleConversion {
 
 #[derive(Clone, Debug)]
 pub struct BulkDumpRequest {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     program: u8,
     bank: Option<u8>,
@@ -311,7 +311,7 @@ impl BulkDumpRequest {
 
 #[derive(Clone, Debug)]
 pub struct BulkDump {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     program: u8,
     bank: Option<u8>,
@@ -372,7 +372,7 @@ impl BulkDump {
 macro_rules! dumps {
     ($($name:ident {$($extra:ident),*} $value:ident : $ty:ty;)*) => { $(
         #[derive(Clone, Debug)]
-        pub struct $name {metadata: Option<Box<crate::messages::Metadata>>, device_id:u8, $($extra:u8,)* program:u8, name:String, $value:$ty}
+        pub struct $name {metadata: Option<std::sync::Arc<crate::messages::Metadata>>, device_id:u8, $($extra:u8,)* program:u8, name:String, $value:$ty}
         crate::messages::value_metadata!($name { device_id, $($extra,)* program, name, $value });
         impl $name {
             pub fn new(device_id:i64, $($extra:i64,)* program:i64, name:String, $value:$ty)->Result<Self,ValueError> {
@@ -392,7 +392,7 @@ dumps! {
 }
 #[derive(Clone, Debug)]
 pub struct NoteChange {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     program: u8,
     bank: Option<u8>,
@@ -447,7 +447,7 @@ impl NoteChange {
 }
 #[derive(Clone, Debug)]
 pub struct ScaleOctaveChange {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     realtime: bool,
     channels: Box<[u8]>,

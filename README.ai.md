@@ -138,6 +138,11 @@ provide either a callback or `receive(timeout=..., cancel=...)`, returning an
 immutable `messages.Message` or `events.StreamDiagnostic`. Messages carry optional
 `timestamp`, `stream` and `span` fields directly. `replace()` and `transpose()`
 preserve this metadata; equality and hashing compare MIDI content only.
+Clocks share their immutable source/timing descriptions. Optional message
+metadata is stored out of line and shared by clones; replacing metadata changes
+only the new message. Plain Python messages retain no metadata allocation.
+Rust `Metadata.stream` uses `Option<Arc<str>>`; `Message::stream()` still returns
+`Option<&str>`, and `with_stream` continues accepting strings.
 Input channel selection is exact: `Input(channel=1)` excludes messages without a
 channel. Use `Input(channel=(1, None))` to include them, `(None,)` for channel-less
 messages only, or an empty collection for no messages. Omission or `channel=None`

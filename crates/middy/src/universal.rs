@@ -10,7 +10,7 @@ pub(crate) fn is_identity_reply(data: &[u8]) -> bool {
 macro_rules! device_messages {
     ($($name:ident { $($field:ident : $ty:ty = $low:literal ..= $high:literal),* };)*) => {$(
         #[derive(Clone,Debug)]
-        pub struct $name {metadata: Option<Box<crate::messages::Metadata>>, device_id:u8,$($field:$ty),*}
+        pub struct $name {metadata: Option<std::sync::Arc<crate::messages::Metadata>>, device_id:u8,$($field:$ty),*}
         impl $name {
             pub fn new(device_id:i64,$($field:i64),*)->Result<Self,ValueError> {
                 Ok(Self {metadata: None, device_id:bounded(device_id,"device_id",0,127)? as u8,
@@ -59,7 +59,7 @@ impl PrimitiveMessage for MasterCoarseTuning {
 
 #[derive(Clone, Debug)]
 pub struct IdentityReply {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     manufacturer: Box<[u8]>,
     family: u16,

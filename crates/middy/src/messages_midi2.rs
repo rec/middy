@@ -4,7 +4,7 @@ use crate::ump::UmpValue;
 macro_rules! musical_values {
     ($($name:ident [$first:expr,$second:expr] {$($field:ident:$ty:ty = $lo:literal ..= $hi:literal => [$word:literal,$shift:literal,$mask:literal,$bias:literal]),*};)*) => {
         $(#[derive(Clone, Debug)]
-        pub struct $name { metadata: Option<Box<Metadata>>, $($field: $ty),* }
+        pub struct $name { metadata: Option<std::sync::Arc<Metadata>>, $($field: $ty),* }
         value_metadata!($name { $($field),* });
         impl $name {
             #[allow(clippy::too_many_arguments)]
@@ -55,7 +55,7 @@ pub enum ControllerFamily { Registered, Assignable }
 macro_rules! family_values {
     ($($name:ident [$first:expr,$second:expr] {$($field:ident:$ty:ty = $lo:literal ..= $hi:literal => [$word:literal,$shift:literal,$mask:literal,$bias:literal]),*};)*) => {
         $(#[derive(Clone, Debug)]
-        pub struct $name { metadata: Option<Box<Metadata>>, family: ControllerFamily, $($field:$ty),* }
+        pub struct $name { metadata: Option<std::sync::Arc<Metadata>>, family: ControllerFamily, $($field:$ty),* }
         value_metadata!($name { family, $($field),* });
         impl $name {
             pub fn new($($field:i64),*) -> Result<Self,ValueError> { Self::new_with_family($($field,)* ControllerFamily::Registered) }

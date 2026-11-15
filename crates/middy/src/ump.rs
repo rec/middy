@@ -26,7 +26,7 @@ pub trait UmpValue: Message {
 macro_rules! scalar {
     ($($name:ident [$first:expr,$second:expr] {$($field:ident:$ty:ty = $lo:literal ..= $hi:literal => [$word:literal,$shift:literal,$mask:literal,$bias:literal]),*};)*)=>{
         $(#[derive(Clone,Debug)]
-        pub struct $name {metadata: Option<Box<crate::messages::Metadata>>, $($field:$ty),*}
+        pub struct $name {metadata: Option<std::sync::Arc<crate::messages::Metadata>>, $($field:$ty),*}
         impl $name {
             #[allow(clippy::too_many_arguments)]
             pub fn new($($field:i64),*)->Result<Self,ValueError>{
@@ -115,7 +115,7 @@ pub fn encode(value: &(impl UmpValue + ?Sized)) -> Result<Vec<u32>, ValueError> 
 
 #[derive(Clone, Debug)]
 pub struct SysEx7Packet {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: u8,
     format: u8,
     data: Vec<u8>,
@@ -160,7 +160,7 @@ impl UmpValue for SysEx7Packet {
 }
 #[derive(Clone, Debug)]
 pub struct SysEx8Packet {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: u8,
     format: u8,
     stream_id: u8,
@@ -232,7 +232,7 @@ impl UmpValue for SysEx8Packet {
 /// not implied. Each packet has fourteen bytes after its MDS identifier.
 #[derive(Clone, Debug)]
 pub struct MixedDataSet {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: u8,
     header: bool,
     mds_id: u8,
@@ -286,7 +286,7 @@ impl UmpValue for MixedDataSet {
 }
 #[derive(Clone, Debug)]
 pub struct FlexData {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: u8,
     format: u8,
     channel: Option<u8>,
@@ -404,7 +404,7 @@ fn validate_flex(v: &FlexData) -> Result<(), ValueError> {
 }
 #[derive(Clone, Debug)]
 pub struct StreamMessage {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     format: u8,
     status: u16,
     data: Vec<u8>,
@@ -490,7 +490,7 @@ fn validate_stream(v: &StreamMessage) -> Result<(), ValueError> {
 }
 #[derive(Clone, Debug)]
 pub struct OpaquePacket {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     words: Vec<u32>,
 }
 impl OpaquePacket {

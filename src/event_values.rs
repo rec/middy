@@ -32,14 +32,13 @@ pub(crate) fn with_metadata(
     object: &Bound<'_, PyAny>,
     payload: model::Payload,
 ) -> PyResult<model::Payload> {
-    let metadata = object
-        .extract::<PyRef<'_, crate::messages::Message>>()?
-        .metadata();
+    let message = object.extract::<PyRef<'_, crate::messages::Message>>()?;
+    let metadata = message.metadata();
     let value = payload
         .with_metadata(middy::messages::Metadata {
-            stream: metadata.stream,
-            timestamp: metadata.timestamp,
-            span: metadata.span,
+            stream: metadata.and_then(|m| m.stream.clone()),
+            timestamp: metadata.and_then(|m| m.timestamp.clone()),
+            span: metadata.and_then(|m| m.span.clone()),
         })
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(value)
@@ -76,11 +75,11 @@ pub fn to_python(py: Python<'_>, v: model::Payload) -> PyResult<Py<PyAny>> {
     object
         .bind(py)
         .extract::<PyRef<'_, crate::messages::Message>>()?
-        .attach(crate::messages::Metadata {
+        .attach(Some(std::sync::Arc::new(crate::messages::Metadata {
             timestamp: metadata.timestamp,
             stream: metadata.stream,
             span: metadata.span,
-        })?;
+        })))?;
     Ok(object)
 }
 #[pyclass(frozen, module = "middy.events")]

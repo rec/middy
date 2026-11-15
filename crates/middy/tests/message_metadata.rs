@@ -26,11 +26,51 @@ fn metadata() -> Metadata {
 }
 fn check_value<M: Message + Clone + Eq + Hash>(value: M) {
     let attached = value.clone().with_metadata(metadata()).unwrap();
+    let cloned = attached.clone();
+    assert!(std::ptr::eq(
+        attached.metadata().unwrap(),
+        cloned.metadata().unwrap()
+    ));
     assert_eq!(attached.metadata(), Some(&metadata()));
     assert_eq!(attached, value);
     assert_eq!(HashSet::from([attached.clone(), value.clone()]).len(), 1);
     assert_eq!(attached.without_metadata().metadata(), None);
     assert_eq!(value.metadata(), None);
+}
+
+#[test]
+fn clock_clones_share_descriptions_without_changing_value_semantics() {
+    let original = timestamp().clock;
+    let cloned = original.clone();
+    assert!(std::ptr::eq(original.identity(), cloned.identity()));
+    assert!(std::ptr::eq(original.origin(), cloned.origin()));
+    let configured = cloned.with_transport(1, true);
+    assert_eq!(original.backend(), None);
+    assert_eq!(original.mode(), None);
+    assert_eq!(configured.backend(), Some(1));
+    assert_eq!(configured.mode(), Some(true));
+    assert_eq!(
+        HashSet::from([original.clone(), timestamp().clock]).len(),
+        1
+    );
+    assert_ne!(configured, original);
+}
+
+#[test]
+fn clocks_and_message_values_keep_only_compact_metadata_handles() {
+    use std::mem::size_of;
+    assert_eq!(size_of::<Clock>(), size_of::<usize>());
+    assert!(size_of::<Timestamp>() <= 24);
+    assert!(size_of::<SourceSpan>() <= 64);
+    assert!(size_of::<NoteOn>() <= 32);
+    println!(
+        "Rust sizes: Clock={}, Timestamp={}, SourceSpan={}, Metadata={}, NoteOn={}",
+        size_of::<Clock>(),
+        size_of::<Timestamp>(),
+        size_of::<SourceSpan>(),
+        size_of::<Metadata>(),
+        size_of::<NoteOn>(),
+    );
 }
 
 #[test]

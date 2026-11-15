@@ -13,28 +13,33 @@ use pyo3::types::{PyBytes, PyDict, PyInt, PyTuple};
 #[pyclass(frozen, subclass, module = "middy.messages")]
 #[derive(Default)]
 pub(crate) struct Message {
-    metadata: std::sync::OnceLock<Metadata>,
+    metadata: std::sync::OnceLock<Option<std::sync::Arc<Metadata>>>,
 }
 #[derive(Clone, Default)]
 pub(crate) struct Metadata {
     pub timestamp: Option<middy::events::Timestamp>,
-    pub stream: Option<String>,
+    pub stream: Option<std::sync::Arc<str>>,
     pub span: Option<middy::events::SourceSpan>,
 }
 impl Message {
-    pub(crate) fn metadata(&self) -> Metadata {
-        self.metadata.get().cloned().unwrap_or_default()
+    pub(crate) fn metadata(&self) -> Option<&std::sync::Arc<Metadata>> {
+        self.metadata.get().and_then(Option::as_ref)
     }
-    pub(crate) fn attach(&self, metadata: Metadata) -> PyResult<()> {
-        if metadata.stream.as_ref().is_some_and(|s| s.is_empty()) {
-            return Err(PyValueError::new_err("empty stream identity"));
-        }
-        if let Some(span) = &metadata.span {
-            span.validate(metadata.timestamp.as_ref())
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    pub(crate) fn attach(&self, metadata: Option<std::sync::Arc<Metadata>>) -> PyResult<()> {
+        if let Some(metadata) = &metadata {
+            if metadata.stream.as_ref().is_some_and(|s| s.is_empty()) {
+                return Err(PyValueError::new_err("empty stream identity"));
+            }
+            if let Some(span) = &metadata.span {
+                span.validate(metadata.timestamp.as_ref())
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            }
         }
         self.metadata
-            .set(metadata)
+            .set(
+                metadata
+                    .filter(|m| m.timestamp.is_some() || m.stream.is_some() || m.span.is_some()),
+            )
             .map_err(|_| PyValueError::new_err("message metadata is already set"))
     }
 }
@@ -53,17 +58,17 @@ impl Message {
     #[getter]
     fn timestamp(&self) -> Option<crate::event_values::Timestamp> {
         self.metadata()
-            .timestamp
+            .and_then(|m| m.timestamp.clone())
             .map(|value| crate::event_values::Timestamp { value })
     }
     #[getter]
-    fn stream(&self) -> Option<String> {
-        self.metadata().stream
+    fn stream(&self) -> Option<&str> {
+        self.metadata().and_then(|m| m.stream.as_deref())
     }
     #[getter]
     fn span(&self) -> Option<crate::event_values::SourceSpan> {
         self.metadata()
-            .span
+            .and_then(|m| m.span.clone())
             .map(|value| crate::event_values::SourceSpan { value })
     }
     #[new]

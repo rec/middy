@@ -34,7 +34,7 @@ struct Marker {
     time: Option<Timestamp>,
 }
 pub struct Decoder {
-    stream: String,
+    stream: std::sync::Arc<str>,
     encoding: Encoding,
     bytes: codecs::Decoder,
     words: ump::Decoder,
@@ -49,7 +49,7 @@ impl Decoder {
             return Err(invalid(0, "empty source identity"));
         }
         Ok(Self {
-            stream,
+            stream: stream.into(),
             encoding,
             bytes: codecs::Decoder::new(limit).map_err(|e| invalid(0, e))?,
             words: ump::Decoder::new(false),
@@ -61,7 +61,7 @@ impl Decoder {
     }
     fn diagnostic(&self, kind: DiagnosticKind, lost: u64, reason: String, packet: u64) -> Item {
         Item::Diagnostic(Diagnostic {
-            stream: self.stream.clone(),
+            stream: self.stream.to_string(),
             packet,
             kind,
             lost,

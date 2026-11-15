@@ -2,11 +2,42 @@
 
 import sys
 from pathlib import Path
+from struct import calcsize
 from subprocess import run
 
 from native import middy_messages
 
-from middy import messages
+from middy import events, messages
+
+
+def test_optional_provenance_does_not_inflate_message_objects() -> None:
+    assert messages.Message.__basicsize__ <= object.__basicsize__ + 2 * calcsize("P")
+    clock = events.Clock(identity="capture", origin="test")
+    timestamp = events.Timestamp(ticks=12, clock=clock)
+    span = events.SourceSpan(
+        first_packet=1,
+        last_packet=1,
+        first_timestamp=timestamp,
+        last_timestamp=timestamp,
+    )
+    sizes: dict[str, int] = {}
+    for m in [
+        messages.NoteOn(60),
+        messages.NoteOff(60),
+        messages.TimingClock(),
+        messages.SysEx(b""),
+    ]:
+        tagged = m.replace(timestamp=timestamp, stream="keyboard", span=span)
+        assert sys.getsizeof(m) <= object.__basicsize__ + 8 * calcsize("P")
+        assert sys.getsizeof(tagged) == sys.getsizeof(m)
+        assert (tagged.timestamp, tagged.stream, tagged.span) == (
+            timestamp,
+            "keyboard",
+            span,
+        )
+        assert m.timestamp is None and m.stream is None and m.span is None
+        sizes[type(m).__name__] = sys.getsizeof(m)
+    print("Python fixed message sizes:", sizes)
 
 
 def test_midi2_controller_families_preserve_values_and_per_note_validation() -> None:

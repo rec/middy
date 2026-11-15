@@ -4,7 +4,7 @@ use crate::messages::{AnyMessage, Command, ParameterSet, ValueError};
 
 #[derive(Clone, Debug)]
 pub struct ZoneConfiguration {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: Option<u8>,
     manager_channel: u8,
     members: u8,

@@ -16,6 +16,7 @@ def test_native_callback_lifecycle_completes_without_deadlock() -> None:
         os.environ,
         {
             "PYO3_PYTHON": sys.executable,
+            "PYTHONPATH": os.pathsep.join(sys.path),
             "CARGO_HOME": str(project / "target" / "cargo-home"),
         },
     ):

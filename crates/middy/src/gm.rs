@@ -173,7 +173,7 @@ pub enum Mode {
 }
 #[derive(Clone, Debug)]
 pub struct GmMode {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     mode: Mode,
     device_id: u8,
 }

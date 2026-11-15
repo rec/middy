@@ -665,7 +665,7 @@ pub(crate) fn replacement<'py>(
     let mut metadata = object
         .extract::<PyRef<'_, Message>>()
         .ok()
-        .map(|m| m.metadata());
+        .map(|m| m.metadata().cloned());
     let values = PyDict::new(object.py());
     for field in fields {
         values.set_item(*field, object.getattr(*field)?)?;
@@ -676,17 +676,19 @@ pub(crate) fn replacement<'py>(
             if let Some(metadata) = &mut metadata {
                 match name.as_str() {
                     "timestamp" => {
-                        metadata.timestamp = value
-                            .extract::<Option<PyRef<'_, crate::event_values::Timestamp>>>()?
-                            .map(|v| v.value.clone());
+                        std::sync::Arc::make_mut(metadata.get_or_insert_default()).timestamp =
+                            value
+                                .extract::<Option<PyRef<'_, crate::event_values::Timestamp>>>()?
+                                .map(|v| v.value.clone());
                         continue;
                     }
                     "stream" => {
-                        metadata.stream = value.extract()?;
+                        std::sync::Arc::make_mut(metadata.get_or_insert_default()).stream =
+                            value.extract::<Option<String>>()?.map(Into::into);
                         continue;
                     }
                     "span" => {
-                        metadata.span = value
+                        std::sync::Arc::make_mut(metadata.get_or_insert_default()).span = value
                             .extract::<Option<PyRef<'_, crate::event_values::SourceSpan>>>()?
                             .map(|v| v.value.clone());
                         continue;

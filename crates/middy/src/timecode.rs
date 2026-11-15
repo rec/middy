@@ -11,7 +11,7 @@ pub enum FrameRate {
 }
 #[derive(Clone, Debug)]
 pub struct FullFrame {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     device_id: u8,
     rate: FrameRate,
     hours: u8,

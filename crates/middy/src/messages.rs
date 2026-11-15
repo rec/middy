@@ -23,7 +23,8 @@ use std::fmt;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Metadata {
     pub timestamp: Option<crate::events::Timestamp>,
-    pub stream: Option<String>,
+    /// Shared source identity. Convert owned strings with `.into()`.
+    pub stream: Option<std::sync::Arc<str>>,
     pub span: Option<crate::events::SourceSpan>,
 }
 impl Metadata {
@@ -87,7 +88,7 @@ pub trait Message: fmt::Debug {
         Self: Sized,
     {
         let mut metadata = self.metadata().cloned().unwrap_or_default();
-        metadata.stream = Some(source.into());
+        metadata.stream = Some(source.into().into());
         self.with_metadata(metadata)
     }
     fn with_span(self, span: crate::events::SourceSpan) -> Result<Self, ValueError>
@@ -136,7 +137,7 @@ macro_rules! value_metadata {
             fn metadata(&self) -> Option<&crate::messages::Metadata> { self.metadata.as_deref() }
             fn with_metadata(mut self, metadata: crate::messages::Metadata) -> Result<Self, crate::messages::ValueError> {
                 metadata.validate()?;
-                self.metadata = Some(Box::new(metadata));
+                self.metadata = Some(std::sync::Arc::new(metadata));
                 Ok(self)
             }
             fn without_metadata(mut self) -> Self { self.metadata = None; self }
@@ -216,7 +217,7 @@ pub(crate) fn checked_group(group: i64) -> Result<u8, ValueError> {
 /// An absolute registered or non-registered parameter value.
 #[derive(Clone, Debug)]
 pub struct ParameterSet {
-    metadata: Option<Box<Metadata>>,
+    metadata: Option<std::sync::Arc<Metadata>>,
     group: Option<u8>,
     channel: Option<u8>,
     parameter: u16,
@@ -313,7 +314,7 @@ macro_rules! channel_values {
         $($field:ident: $ty:ty => $setter:ident = ($low1:expr, $high1:expr, $low2:expr, $high2:expr) => ($initial1:expr, $initial2:expr)),*
     } { $($extra:ident: $ety:ty => $esetter:ident = $max:expr),* };)*) => {$(
         #[derive(Clone, Debug)]
-        pub struct $name { metadata: Option<Box<Metadata>>, format: ChannelFormat, channel: Option<u8>, $($field: $ty,)* $($extra: Option<$ety>,)* }
+        pub struct $name { metadata: Option<std::sync::Arc<Metadata>>, format: ChannelFormat, channel: Option<u8>, $($field: $ty,)* $($extra: Option<$ety>,)* }
         value_metadata!($name { format, channel, $($field,)* $($extra,)* });
         impl $name {
             pub fn new($($arg: i64),*) -> Result<Self, ValueError> {
@@ -397,7 +398,7 @@ channel_values! {
 
 #[derive(Clone, Debug)]
 pub struct ProgramChange {
-    metadata: Option<Box<Metadata>>,
+    metadata: Option<std::sync::Arc<Metadata>>,
     format: ChannelFormat,
     channel: Option<u8>,
     program: u8,
@@ -509,7 +510,7 @@ impl ProgramChange {
 /// A controller value with an explicit wire resolution.
 #[derive(Clone, Debug)]
 pub struct ControlChange {
-    metadata: Option<Box<Metadata>>,
+    metadata: Option<std::sync::Arc<Metadata>>,
     format: ChannelFormat,
     channel: Option<u8>,
     controller: u8,
@@ -663,7 +664,7 @@ impl ControlChange {
 /// A single relative step of a registered or non-registered parameter.
 #[derive(Clone, Debug)]
 pub struct ParameterStep {
-    metadata: Option<Box<Metadata>>,
+    metadata: Option<std::sync::Arc<Metadata>>,
     group: Option<u8>,
     channel: Option<u8>,
     parameter: u16,
@@ -740,7 +741,7 @@ impl ParameterStep {
 macro_rules! system_messages {
     ($($name:ident { $($field:ident: $ty:ty = $low:literal ..= $high:literal),* };)*) => {
         $(#[derive(Clone, Debug)]
-        pub struct $name { metadata: Option<Box<Metadata>>, group: Option<u8>, $($field: $ty),* }
+        pub struct $name { metadata: Option<std::sync::Arc<Metadata>>, group: Option<u8>, $($field: $ty),* }
         value_metadata!($name { group, $($field),* });
         impl $name {
             group_methods!();
@@ -1021,7 +1022,7 @@ impl AnyMessage {
 /// Seven-bit SysEx payload, without the F0/F7 framing bytes.
 #[derive(Clone, Debug)]
 pub struct SysEx {
-    metadata: Option<Box<crate::messages::Metadata>>,
+    metadata: Option<std::sync::Arc<crate::messages::Metadata>>,
     group: Option<u8>,
     data: Box<[u8]>,
 }

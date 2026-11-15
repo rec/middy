@@ -277,7 +277,9 @@ fn map_record(r: &mut archive::Record, o: &Options) -> io::Result<()> {
         archive::Record::Event(e) => {
             let mut metadata = e.metadata().cloned().unwrap_or_default();
             if let Some(source) = &mut metadata.stream {
-                map_id(source, &o.source_map);
+                if let Some(mapped) = o.source_map.get(source.as_ref()) {
+                    *source = mapped.as_str().into();
+                }
             }
             map_time(&mut metadata.timestamp, o)?;
             if let Some(span) = &mut metadata.span {

@@ -88,6 +88,34 @@ fn fourteen_bit_controller_retains_the_existing_command_encoding_and_budget() {
     assert!(archive::payload_size(&message).unwrap() >= bytes.len());
 }
 #[test]
+fn decoded_messages_share_declared_source_and_clock_descriptions() {
+    let records = records();
+    let mut bytes = Vec::new();
+    let mut writer = archive::Writer::new(&mut bytes, 1024).unwrap();
+    for record in [&records[0], &records[1], &records[2], &records[2]] {
+        writer.write(record).unwrap();
+    }
+    writer.finish(true, "").unwrap();
+    let decoded = archive::Reader::new(bytes.as_slice(), 1024, false, false)
+        .unwrap()
+        .collect::<io::Result<Vec<_>>>()
+        .unwrap();
+    let (Record::Event(first), Record::Event(second)) = (&decoded[2], &decoded[3]) else {
+        panic!("expected two message records");
+    };
+    assert!(std::sync::Arc::ptr_eq(
+        first.metadata().unwrap().stream.as_ref().unwrap(),
+        second.metadata().unwrap().stream.as_ref().unwrap(),
+    ));
+    assert!(std::ptr::eq(
+        first.timestamp().unwrap().clock.identity(),
+        second.timestamp().unwrap().clock.identity(),
+    ));
+    assert_eq!(decoded[2], records[2]);
+    assert_eq!(decoded[3], records[2]);
+}
+
+#[test]
 fn archive_integrity_order_exact_time_and_verified_recovery() {
     assert_eq!(archive::crc32(b"123456789"), 0xcbf43926);
     let b = saved();

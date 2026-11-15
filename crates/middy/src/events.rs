@@ -14,6 +14,7 @@ pub use crate::playback::{
 pub use crate::transport::ReceivedPacket;
 use crate::ump::PacketValue;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// A sequence item or an explicit wait, as produced by [`with_gap`].
@@ -33,8 +34,14 @@ pub fn with_gap<T>(
         .flat_map(move |i| [GapItem::Item(i), GapItem::Gap(gap)])
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// Immutable clock value backed by a shared source and timing description.
+/// Cloning preserves value equality without copying the descriptor's strings.
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Clock {
+    description: Arc<ClockDescription>,
+}
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ClockDescription {
     identity: String,
     numerator: u64,
     denominator: u64,
@@ -60,40 +67,56 @@ impl Clock {
             return Err(invalid(0, "invalid clock descriptor"));
         }
         Ok(Self {
-            identity,
-            numerator,
-            denominator,
-            origin,
-            resolution_ticks,
-            backend: None,
-            mode: None,
+            description: Arc::new(ClockDescription {
+                identity,
+                numerator,
+                denominator,
+                origin,
+                resolution_ticks,
+                backend: None,
+                mode: None,
+            }),
         })
     }
     pub fn with_transport(mut self, backend: i32, enabled: bool) -> Self {
-        self.backend = Some(backend);
-        self.mode = Some(enabled);
+        let description = Arc::make_mut(&mut self.description);
+        description.backend = Some(backend);
+        description.mode = Some(enabled);
         self
     }
     pub fn identity(&self) -> &str {
-        &self.identity
+        &self.description.identity
     }
     pub fn numerator(&self) -> u64 {
-        self.numerator
+        self.description.numerator
     }
     pub fn denominator(&self) -> u64 {
-        self.denominator
+        self.description.denominator
     }
     pub fn origin(&self) -> &str {
-        &self.origin
+        &self.description.origin
     }
     pub fn resolution_ticks(&self) -> Option<u64> {
-        self.resolution_ticks
+        self.description.resolution_ticks
     }
     pub fn backend(&self) -> Option<i32> {
-        self.backend
+        self.description.backend
     }
     pub fn mode(&self) -> Option<bool> {
-        self.mode
+        self.description.mode
+    }
+}
+impl std::fmt::Debug for Clock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Clock")
+            .field("identity", &self.description.identity)
+            .field("numerator", &self.description.numerator)
+            .field("denominator", &self.description.denominator)
+            .field("origin", &self.description.origin)
+            .field("resolution_ticks", &self.description.resolution_ticks)
+            .field("backend", &self.description.backend)
+            .field("mode", &self.description.mode)
+            .finish()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

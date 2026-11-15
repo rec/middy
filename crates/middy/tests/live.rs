@@ -66,6 +66,10 @@ fn completion_timestamps_and_spans_survive_realtime_and_running_status() {
         panic!()
     };
     assert_eq!(running.span().unwrap().first_packet, 1);
+    assert!(Arc::ptr_eq(
+        e.metadata().unwrap().stream.as_ref().unwrap(),
+        running.metadata().unwrap().stream.as_ref().unwrap(),
+    ));
     assert!(d.finish().is_empty());
 }
 #[test]
