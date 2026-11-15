@@ -149,7 +149,7 @@ even with no devices present. A port pattern follows all matching inputs;
 an explicit discovery snapshot selects one device. Each connection has its own
 decoder, stream and clock.
 `Input(port=["Keyboard *", "Pad[12]"])` follows the union of matching names,
-including future connections. Rust uses `.with_ports(["Keyboard *", "Pad[12]"])?`.
+including future connections. Rust uses `.with_port(["Keyboard *", "Pad[12]"])?`.
 Entries use the same case-sensitive substring/shell matching as a single selector;
 overlaps open each port once. An empty collection selects none; omission selects all.
 `Message.port` is an optional `PortInfo` description: name, backend, backend ID

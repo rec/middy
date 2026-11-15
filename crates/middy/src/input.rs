@@ -12,7 +12,7 @@ mod recording;
 pub use recording::Recording;
 #[path = "input_api.rs"]
 mod api;
-pub use api::{Input, InputErrors, RecordingOptions};
+pub use api::{Input, InputErrors, PortPatterns, RecordingOptions};
 
 /// Iterate over all current and subsequently connected inputs, reporting diagnostics to stderr.
 /// No native client is created until discovery or receiving. Drop closes input.
@@ -218,14 +218,10 @@ impl Core {
         self.channels = Some(mask);
         Ok(self)
     }
-    pub fn with_ports(
-        mut self,
-        patterns: impl IntoIterator<Item = impl Into<String>>,
-    ) -> crate::midi::Result<Self> {
+    pub fn with_port(mut self, patterns: Vec<String>) -> crate::midi::Result<Self> {
         if self.connection.is_some() || self.all_connection.is_some() || self.closed {
             return Err(invalid("input is connected or closed").into());
         }
-        let patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
         if patterns.iter().any(String::is_empty) {
             return Err(invalid("port pattern must not be empty").into());
         }

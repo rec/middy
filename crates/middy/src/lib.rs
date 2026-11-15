@@ -68,7 +68,7 @@ pub use messages::{
 pub use metrics::{Distribution, Histogram};
 pub use midi::{
     Backend, Encoding, Error, Input, Output, OutputSource, OutputValue, PlaybackOptions, Port,
-    Recording, RecordingOptions, SubprocessOptions, TimestampMode,
+    PortPatterns, Recording, RecordingOptions, SubprocessOptions, TimestampMode,
 };
 pub use mpe::ZoneConfiguration;
 pub use routing::{Route, Router};

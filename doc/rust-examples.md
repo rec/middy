@@ -118,16 +118,16 @@ for message in Input::new() {
 The default input opens even when no devices are present and checks for new or
 removed ports every 100 ms within the selected backend and encoding.
 `with_port("Keyboard")?` follows all matches, including ports connected later,
-just like `with_ports(["Keyboard"])?`. Use `connect(&ports[index])?` to select
+just like `with_port(["Keyboard"])?`. Use `connect(&ports[index])?` to select
 exactly one discovery snapshot.
-Use `with_ports` for the union of case-sensitive name substrings or shell patterns,
+Use `with_port` for the union of case-sensitive name substrings or shell patterns,
 including future matches. Patterns support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`;
 overlapping entries open a port once. An empty collection selects no ports.
 
 ```rust
 use middy::{Input, Message};
 
-for message in Input::new().with_ports(["Keyboard *", "Pad[12]"])? {
+for message in Input::new().with_port(["Keyboard *", "Pad[12]"])? {
     println!("{:?}: {message:?}", message.port());
 }
 ```

@@ -5,6 +5,7 @@ use crate::{
     events::{Clock, Payload},
     live::Item,
     midi,
+    output::{Sequence, Single},
     playback::Cancellation,
     transport::{self, Port, ReceivedPacket},
 };
@@ -23,10 +24,29 @@ use std::{
 type Callback<T> = Box<dyn FnMut(midi::Result<Item<T>>) + Send>;
 type Receive<T> = fn(&mut Core, Option<Instant>) -> Option<io::Result<Item<T>>>;
 
+/// Port selectors accepted by Input::with_port: one string or an iterable of strings.
+pub trait PortPatterns<Kind> {
+    #[doc(hidden)]
+    fn into_patterns(self) -> Vec<String>;
+}
+impl<S: AsRef<str>> PortPatterns<Single> for S {
+    fn into_patterns(self) -> Vec<String> {
+        vec![self.as_ref().to_owned()]
+    }
+}
+impl<I: IntoIterator> PortPatterns<Sequence> for I
+where
+    I::Item: AsRef<str>,
+{
+    fn into_patterns(self) -> Vec<String> {
+        self.into_iter().map(|p| p.as_ref().to_owned()).collect()
+    }
+}
+
 /// A lazy input yielding decoded messages; raw() selects unchanged packets.
 /// By default it follows all visible ports of the selected backend/encoding,
-/// including ports connected later. with_ports filters names/patterns;
-/// with_port follows one pattern; connect selects one discovery snapshot.
+/// including ports connected later. with_port filters names/patterns;
+/// connect selects one discovery snapshot.
 /// Callbacks and attached recording use the same bounded background dispatcher.
 /// Raw input has no decoded recording or channel-filtering methods.
 /// ```no_run
@@ -269,19 +289,11 @@ impl<T: Send + 'static> Input<T> {
             &mut *self.core.lock().unwrap_or_else(|p| p.into_inner()),
         ))
     }
-    /// Follow all current and future ports matching this name substring or shell pattern.
-    pub fn with_port(mut self, pattern: impl Into<String>) -> midi::Result<Self> {
-        let core = self.take_core()?.with_ports([pattern])?;
-        self.core = Arc::new(Mutex::new(core));
-        Ok(self)
-    }
     /// Follow all ports matching any name substring or case-sensitive shell pattern.
-    /// New matches connect automatically; an empty collection selects no ports.
-    pub fn with_ports(
-        mut self,
-        patterns: impl IntoIterator<Item = impl Into<String>>,
-    ) -> midi::Result<Self> {
-        let core = self.take_core()?.with_ports(patterns)?;
+    /// Accepts one string or an iterable of strings. New matches connect automatically;
+    /// an empty collection selects no ports.
+    pub fn with_port<K>(mut self, patterns: impl PortPatterns<K>) -> midi::Result<Self> {
+        let core = self.take_core()?.with_port(patterns.into_patterns())?;
         self.core = Arc::new(Mutex::new(core));
         Ok(self)
     }

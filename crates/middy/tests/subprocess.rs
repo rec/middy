@@ -49,7 +49,7 @@ fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() 
         .unwrap()
         .with_subprocess_options(worker)
         .unwrap()
-        .with_ports(["Keyboard *", "* A", "Pad[!2]", "Future?"])
+        .with_port(["Keyboard *", "* A", "Pad[!2]", "Future?"])
         .unwrap();
     let mut selected = std::collections::BTreeSet::new();
     for _ in 0..3 {
@@ -88,11 +88,14 @@ fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() 
 }
 
 #[test]
-fn string_and_singleton_selection_follow_all_matches_even_when_initially_absent() {
+fn string_and_collection_selectors_follow_all_matches_even_when_initially_absent() {
     use middy::{events::InputItem, messages::Message};
     let _serial = SERIAL.lock().unwrap();
     let path = fixture().with_extension("one-pattern");
-    for collection in [false, true] {
+    let pattern = "Keyboard *".to_owned();
+    let owned_patterns = vec![pattern.clone()];
+    let borrowed_patterns = ["Keyboard *"];
+    for form in 0..8 {
         std::fs::write(&path, "Pad\n").unwrap();
         let mut worker = options("hotplug");
         worker.args.push(path.clone().into_os_string());
@@ -101,10 +104,15 @@ fn string_and_singleton_selection_follow_all_matches_even_when_initially_absent(
             .unwrap()
             .with_subprocess_options(worker)
             .unwrap();
-        let mut input = if collection {
-            input.with_ports(["Keyboard *"])
-        } else {
-            input.with_port("Keyboard *")
+        let mut input = match form {
+            0 => input.with_port("Keyboard *"),
+            1 => input.with_port(["Keyboard *"]),
+            2 => input.with_port(pattern.clone()),
+            3 => input.with_port(&pattern),
+            4 => input.with_port(owned_patterns.clone()),
+            5 => input.with_port(&owned_patterns),
+            6 => input.with_port(&borrowed_patterns[..]),
+            _ => input.with_port(borrowed_patterns.iter()),
         }
         .unwrap();
         assert!(input
@@ -143,14 +151,17 @@ fn an_empty_input_selection_never_falls_back_to_all_ports() {
         .unwrap()
         .with_subprocess_options(options("early"))
         .unwrap()
-        .with_ports(std::iter::empty::<String>())
+        .with_port(std::iter::empty::<String>())
         .unwrap();
     assert!(input
         .receive(Some(Duration::from_millis(200)), None)
         .unwrap()
         .is_none());
     input.close().unwrap();
-    assert!(Input::new().with_ports(["Keyboard", ""]).is_err());
+    assert!(Input::new().with_port(["Keyboard", ""]).is_err());
+    assert!(Input::new().with_port("").is_err());
+    assert!(Input::new().with_port(String::new()).is_err());
+    assert!(Input::new().with_port(&["Keyboard", ""][..]).is_err());
 }
 
 #[test]

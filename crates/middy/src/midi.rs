@@ -1,6 +1,6 @@
 //! Native MIDI discovery, input, output and scoped connections.
 
-pub use crate::input::{Input, InputErrors, Recording, RecordingOptions};
+pub use crate::input::{Input, InputErrors, PortPatterns, Recording, RecordingOptions};
 #[doc(hidden)]
 pub use crate::output::{select_port_index, OutputState};
 pub use crate::output::{Output, OutputSource, OutputValue, PlaybackOptions};
