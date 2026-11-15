@@ -165,6 +165,18 @@ impl MergedReader {
         .map_err(os_error)
         .map(|v| v.map(|value| SmfEvent { value }))
     }
+    fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        slf.value.as_ref().ok_or_else(closed)?;
+        Ok(slf)
+    }
+    fn __exit__(
+        &mut self,
+        _kind: &Bound<'_, PyAny>,
+        _error: &Bound<'_, PyAny>,
+        _traceback: &Bound<'_, PyAny>,
+    ) {
+        self.close();
+    }
     fn close(&mut self) {
         self.value = None;
     }
@@ -247,6 +259,18 @@ impl SmfTimedReader {
             .map_err(os_error)?;
         item.map(|v| crate::live::item(py, v)).transpose()
     }
+    fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        slf.value.as_ref().ok_or_else(closed)?;
+        Ok(slf)
+    }
+    fn __exit__(
+        &mut self,
+        _kind: &Bound<'_, PyAny>,
+        _error: &Bound<'_, PyAny>,
+        _traceback: &Bound<'_, PyAny>,
+    ) {
+        self.close();
+    }
     fn close(&mut self) {
         self.value = None;
     }
@@ -303,6 +327,18 @@ impl ClipTimedReader {
             })
             .map_err(os_error)?;
         item.map(|v| crate::live::item(py, v)).transpose()
+    }
+    fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        slf.value.as_ref().ok_or_else(closed)?;
+        Ok(slf)
+    }
+    fn __exit__(
+        &mut self,
+        _kind: &Bound<'_, PyAny>,
+        _error: &Bound<'_, PyAny>,
+        _traceback: &Bound<'_, PyAny>,
+    ) {
+        self.close();
     }
     fn close(&mut self) {
         self.value = None;

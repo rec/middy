@@ -1,6 +1,8 @@
 """Standard files retain exact tempo/SMPTE time and require deliberate exports."""
 
+from contextlib import nullcontext
 from io import BytesIO
+from typing import Literal
 
 import pytest
 
@@ -29,11 +31,61 @@ def song(format: int = 1, division: int = 480) -> bytes:
     return stream.getvalue()
 
 
+@pytest.mark.parametrize("kind", ["merged", "smf", "clip"])
+@pytest.mark.parametrize("exit_with_error", [False, True])
+def test_reader_context_closes_on_early_exit_and_preserves_borrowed_stream(
+    kind: Literal["merged", "smf", "clip"], exit_with_error: bool
+) -> None:
+    reader: smf.MergedReader | smf.TimedReader | clip.TimedReader
+    if kind == "clip":
+        source = BytesIO()
+        writer = clip.Writer(source)
+        for m in [
+            ump.DeltaClockstamp(ticks=0),
+            ump.DeltaClockstampTicksPerQuarter(ticks=480),
+            ump.DeltaClockstamp(ticks=0),
+            ump.start_of_clip(),
+            ump.DeltaClockstamp(ticks=1),
+            messages.NoteOn(60, channel=1).replace(group=1),
+            ump.DeltaClockstamp(ticks=0),
+            ump.end_of_clip(),
+        ]:
+            writer.write(m)
+        writer.finish()
+        source.seek(0)
+        reader = clip.TimedReader(source, stream="clip")
+    else:
+        source = BytesIO(song())
+        reader = (
+            smf.MergedReader(source)
+            if kind == "merged"
+            else smf.TimedReader(source, stream="song")
+        )
+    with (
+        pytest.raises(RuntimeError, match="body failed")
+        if exit_with_error
+        else nullcontext()
+    ):
+        with reader as opened:
+            assert opened is reader
+            assert next(opened) is not None
+            if exit_with_error:
+                raise RuntimeError("body failed")
+    assert not source.closed
+    with pytest.raises(OSError, match="closed"):
+        next(reader)
+    with pytest.raises(ValueError, match="closed"):
+        with reader:
+            pytest.fail("closed reader was entered")
+    reader.close()
+
+
 def test_incremental_smf_timeline_matches_file_timing_and_finishes_fragments() -> None:
-    reader = smf.MergedReader(BytesIO(song()))
-    timeline = smf.Timeline(reader.header, stream="incremental")
-    values = [v for e in reader for v in timeline.feed(e)] + timeline.finish()
-    reference = list(smf.TimedReader(BytesIO(song()), stream="reference"))
+    with smf.MergedReader(BytesIO(song())) as reader:
+        timeline = smf.Timeline(reader.header, stream="incremental")
+        values = [v for e in reader for v in timeline.feed(e)] + timeline.finish()
+    with smf.TimedReader(BytesIO(song()), stream="reference") as reader:
+        reference = list(reader)
     assert values == reference
     assert timeline.origin.clock == timeline.clock
     for a, b in zip(values, reference, strict=True):
@@ -190,15 +242,14 @@ def test_clip_timed_reader_omits_file_markers_and_preserves_tempo() -> None:
     ]:
         writer.write(value)
     writer.finish()
-    reader = clip.TimedReader(BytesIO(stream.getvalue()), stream="clip")
-    values = list(reader)
+    with clip.TimedReader(BytesIO(stream.getvalue()), stream="clip") as reader:
+        origin = reader.origin
+        values = list(reader)
     assert len(values) == 2 and all(isinstance(v, messages.Message) for v in values)
     note = values[1]
     assert isinstance(note, messages.Message) and note.timestamp is not None
     assert note.timestamp.seconds == events.Rational(numerator=1, denominator=2)
-    assert (
-        events.PlaybackPlan(origin=reader.origin).deadline(note).delay_ns == 500_000_000
-    )
+    assert events.PlaybackPlan(origin=origin).deadline(note).delay_ns == 500_000_000
 
 
 def test_split_sysex_is_assembled_per_track_when_other_tracks_interleave() -> None:

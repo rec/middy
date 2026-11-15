@@ -582,12 +582,24 @@ For ordinary playback from a file, `md.smf.TimedReader` performs both steps for 
 ```python
 import middy as md
 
-reader = md.smf.MergedReader('performance.mid')
-timeline = md.smf.Timeline(reader.header, stream='performance')
-for event in reader:
-    for message in timeline.feed(event):
-        print(message)
-print(timeline.finish())
+with md.smf.MergedReader('performance.mid') as reader:
+    timeline = md.smf.Timeline(reader.header, stream='performance')
+    for event in reader:
+        for message in timeline.feed(event):
+            print(message)
+    print(timeline.finish())
+```
+
+For playback directly from a file:
+
+```python
+import middy as md
+
+with (
+    md.smf.TimedReader('performance.mid', stream='performance') as reader,
+    md.Output() as output,
+):
+    output.send(reader)
 ```
 
 For a UMP Clip file, use the corresponding entry converter:
@@ -602,8 +614,20 @@ for entry in md.clip.Reader('performance.clip'):
 print(timeline.finish())
 ```
 
-Both expose `clock` and `origin`. Clip returns `None` until the corresponding
-clock/origin is established. `finish()` reports unfinished message fragments.
+For playback directly from a Clip file:
+
+```python
+import middy as md
+
+with (
+    md.clip.TimedReader('performance.clip', stream='performance') as reader,
+    md.Output() as output,
+):
+    output.send(reader)
+```
+
+Both timeline classes expose `clock` and `origin`. Clip returns `None` until the
+corresponding clock/origin is established. `finish()` reports unfinished message fragments.
 Select `sequence` explicitly for a format-2 SMF; Clip can include configuration
 messages with `include_configuration=True`.
 

@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator
 from os import PathLike
+from types import TracebackType
 from typing import BinaryIO
 
 from . import events, messages
@@ -43,6 +44,13 @@ class TimedReader:
     def __iter__(self) -> Iterator[messages.Message | events.StreamDiagnostic]: ...
     def __next__(self) -> messages.Message | events.StreamDiagnostic: ...
     def close(self) -> None: ...
+    def __enter__(self) -> TimedReader: ...
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
 
 class Timeline:
     def __init__(self, *, stream: str, include_configuration: bool = False) -> None: ...
