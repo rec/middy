@@ -77,9 +77,14 @@ _Channel = Annotated[int, BeforeValidator(_builtin_integer), Field(ge=1, le=16)]
 
 
 class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True):
-    """Listen to all current and future ports, or select one with port/connect."""
+    """Listen to current and future ports, optionally selected by names/patterns."""
 
     raw: bool = False
+    port: (
+        Annotated[str, Field(min_length=1)]
+        | list[Annotated[str, Field(min_length=1)]]
+        | None
+    ) = None
     channel: _Channel | list[_Channel | None] | None = None
     event_limit: int = Field(default=128, gt=0)
     sysex_limit: int = Field(default=1_048_576, gt=0)
@@ -91,6 +96,13 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
     _native_client: _native.Input | None = PrivateAttr(default=None)
     _connection: _InputState[T] | None = PrivateAttr(default=None)
     _channels: frozenset[int | None] | None = PrivateAttr(default=None)
+
+    @field_validator("port", mode="before")
+    @classmethod
+    def _port_values(cls, value: object) -> object:
+        if value is None or isinstance(value, str):
+            return value
+        return list(value) if isinstance(value, Iterable) else value
 
     @field_validator("channel", mode="before")
     @classmethod
@@ -173,7 +185,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
     ) -> Input[T]:
         if port is not None and not isinstance(port, midi.Port):
             raise TypeError("port must be a discovery snapshot")
-        if port is None and self.port is not None:
+        if port is None and isinstance(self.port, str):
             port = _native.select_port(self.ports(), self.port, "input")
         self._open(port, None, callback)
         return self
@@ -211,7 +223,11 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         transport = _InputTransport[T]._create(self)
         transport._native = (
             self._native_client.listen_all(
-                connection._deliver, connection.stream, self.sysex_limit, self.raw
+                connection._deliver,
+                connection.stream,
+                self.sysex_limit,
+                self.raw,
+                self.port if isinstance(self.port, list) else None,
             )
             if connection._all
             else self._native_client.connect(

@@ -25,7 +25,8 @@ type Receive<T> = fn(&mut Core, Option<Instant>) -> Option<io::Result<Item<T>>>;
 
 /// A lazy input yielding decoded messages; raw() selects unchanged packets.
 /// By default it follows all visible ports of the selected backend/encoding,
-/// including ports connected later. with_port or connect selects one port.
+/// including ports connected later. with_ports filters names/patterns;
+/// with_port or connect selects one port.
 /// Callbacks and attached recording use the same bounded background dispatcher.
 /// Raw input has no decoded recording or channel-filtering methods.
 /// ```no_run
@@ -270,6 +271,16 @@ impl<T: Send + 'static> Input<T> {
     }
     pub fn with_port(mut self, pattern: impl Into<String>) -> midi::Result<Self> {
         let core = self.take_core()?.with_port(pattern)?;
+        self.core = Arc::new(Mutex::new(core));
+        Ok(self)
+    }
+    /// Follow all ports matching any name substring or case-sensitive shell pattern.
+    /// New matches connect automatically; an empty collection selects no ports.
+    pub fn with_ports(
+        mut self,
+        patterns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> midi::Result<Self> {
+        let core = self.take_core()?.with_ports(patterns)?;
         self.core = Arc::new(Mutex::new(core));
         Ok(self)
     }

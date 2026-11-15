@@ -511,6 +511,7 @@ def iterable_input(
             stream: str,
             sysex_limit: int,
             raw: bool,
+            patterns: list[str] | None,
         ) -> Connection:
             decoder = events.PacketDecoder(
                 stream=stream + "/keyboard",
@@ -712,6 +713,12 @@ def test_input_rejects_invalid_channel_selection(
 def test_raw_input_rejects_channel_selection(channel: int | list[int | None]) -> None:
     with pytest.raises(ValueError, match="decoded"):
         midi.Input(raw=True, channel=channel, run_in_subprocess=False)
+
+
+@pytest.mark.parametrize("port", ["", [""], ["Keyboard", ""], [1], [None], 1])
+def test_input_rejects_invalid_port_patterns_before_opening(port: object) -> None:
+    with pytest.raises(ValueError, match="port"):
+        midi.Input(port=port)  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(

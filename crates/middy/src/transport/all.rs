@@ -221,9 +221,16 @@ impl Input {
         sysex_limit: usize,
         raw: bool,
         subprocess: Option<subprocess::SubprocessOptions>,
+        patterns: Option<Vec<String>>,
         callback: impl FnMut(AllItem) + Send + 'static,
     ) -> Result<AllInputConnection> {
         ensure_control_thread()?;
+        if patterns
+            .as_ref()
+            .is_some_and(|p| p.iter().any(String::is_empty))
+        {
+            return Err(Error::Invalid("port pattern must not be empty".into()));
+        }
         if stream.is_empty() || sysex_limit == 0 {
             return Err(Error::Invalid(
                 "source and SysEx limit must be nonempty".into(),
@@ -262,7 +269,16 @@ impl Input {
                         if *stopped.0.lock().unwrap_or_else(|p| p.into_inner()) {
                             break;
                         }
-                        let visible = keys(&self.ports()?);
+                        let visible = keys(&self.ports()?)
+                            .into_iter()
+                            .filter(|p| {
+                                patterns.as_ref().is_none_or(|patterns| {
+                                    patterns
+                                        .iter()
+                                        .any(|s| crate::output::port_matches(s, &p.name))
+                                })
+                            })
+                            .collect();
                         let removed = topology.update(visible, |key| {
                             let client = if let Some(subprocess) = &subprocess {
                                 Input::new_subprocess(options, subprocess.clone())?

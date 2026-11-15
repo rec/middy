@@ -38,6 +38,18 @@ including devices connected after opening. It can open with no devices present;
 discovery runs every 100 ms. Use `Input(port='Keyboard')` to select a unique name
 or pattern, or connect one snapshot returned by `input.ports()`.
 
+Supply a collection to follow every port matching any entry, including devices
+connected later. Matches use case-sensitive name substrings or shell patterns:
+`*`, `?`, `[abc]`, `[a-z]` and `[!abc]`. Overlapping entries open a port once.
+An empty collection selects no ports; `None` selects all ports.
+
+```python
+import middy as md
+
+for message in md.Input(port=['Keyboard *', 'Pad[12]']):
+    print(message.port, message)
+```
+
 Live messages have an immutable `port` description with `name`, `backend`,
 `backend_id` and `identity`. Names and backend IDs can be duplicated. `identity`
 distinguishes connections and changes on reconnection; it is not a permanent

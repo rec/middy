@@ -52,6 +52,7 @@ class Input:
         stream: str,
         sysex_limit: int,
         raw: bool,
+        patterns: list[str] | None,
     ) -> AllInputConnection: ...
     @property
     def worker_failure(self) -> Exception | None: ...

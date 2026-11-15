@@ -12,7 +12,7 @@ import weakref
 from collections.abc import AsyncIterator, Callable, Iterator
 from functools import partial
 from pathlib import Path
-from queue import Full, Queue
+from queue import Empty, Full, Queue
 from threading import Event, Thread
 from time import monotonic, sleep
 from typing import Protocol, cast
@@ -814,6 +814,71 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
             assert isinstance(reconnected, events.ReceivedPacket)
             assert reconnected.clock != first.clock
     assert source.closed
+
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("callback", [False, True])
+def test_port_collection_follows_only_matching_devices_and_opens_overlaps_once(
+    workers: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    raw: bool,
+    callback: bool,
+) -> None:
+    topology = tmp_path / "selected-ports"
+    names = "Ignored\nKeyboard A\nKeyboard B\nPad1\nPad2\nkeyboard C\n"
+    topology.write_text(names)
+    monkeypatch.setenv("MIDDY_TEST_MODE", "hotplug")
+    monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
+    incoming: Queue[object] = Queue()
+    source = midi.Input(
+        port=("Keyboard *", "* A", "Pad[!2]", "Future?"),
+        raw=raw,
+        run_in_subprocess=True,
+    )
+    if callback:
+        source.connect(callback=incoming.put)
+
+    def receive(timeout: float = 3) -> object:
+        if not callback:
+            return source.receive(timeout=timeout)
+        try:
+            return incoming.get(timeout=timeout)
+        except Empty:
+            return None
+
+    with source:
+        initial = [receive() for _ in range(3)]
+        if raw:
+            assert all(isinstance(m, events.ReceivedPacket) for m in initial)
+        else:
+            assert {
+                m.port.name
+                for m in initial
+                if isinstance(m, messages.Message) and m.port is not None
+            } == {"Keyboard A", "Keyboard B", "Pad1"}
+        assert receive(0.2) is None
+        topology.write_text(names + "Unselected new device\nFuture1\n")
+        added = receive()
+        if raw:
+            assert isinstance(added, events.ReceivedPacket)
+        else:
+            assert isinstance(added, messages.Message) and added.port is not None
+            assert added.port.name == "Future1"
+        assert receive(0.2) is None
+
+
+def test_empty_port_collection_stays_empty_when_devices_appear(
+    workers: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    topology = tmp_path / "no-ports"
+    topology.write_text("Keyboard\n")
+    monkeypatch.setenv("MIDDY_TEST_MODE", "hotplug")
+    monkeypatch.setenv("MIDDY_TEST_PORTS", str(topology))
+    with midi.Input(port=[], run_in_subprocess=True) as source:
+        assert source.receive(timeout=0.2) is None
+        topology.write_text("Keyboard\nPad\n")
+        assert source.receive(timeout=0.2) is None
 
 
 @pytest.mark.parametrize("callback", [False, True])

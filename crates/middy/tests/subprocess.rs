@@ -36,6 +36,78 @@ fn options(mode: &str) -> SubprocessOptions {
     }
 }
 #[test]
+fn selected_inputs_follow_the_union_of_patterns_without_duplicate_connections() {
+    use middy::{events::InputItem, messages::Message};
+    let _serial = SERIAL.lock().unwrap();
+    let path = fixture().with_extension("selected-ports");
+    let names = "Ignored\nKeyboard A\nKeyboard B\nPad1\nPad2\nkeyboard C\n";
+    std::fs::write(&path, names).unwrap();
+    let mut worker = options("hotplug");
+    worker.args.push(path.clone().into_os_string());
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_ports(["Keyboard *", "* A", "Pad[!2]", "Future?"])
+        .unwrap();
+    let mut selected = std::collections::BTreeSet::new();
+    for _ in 0..3 {
+        let Some(InputItem::Message(message)) =
+            input.receive(Some(Duration::from_secs(3)), None).unwrap()
+        else {
+            panic!("message expected")
+        };
+        selected.insert(message.port().unwrap().name.clone());
+    }
+    assert_eq!(
+        selected,
+        [
+            "Keyboard A".to_owned(),
+            "Keyboard B".to_owned(),
+            "Pad1".to_owned()
+        ]
+        .into()
+    );
+    assert!(input
+        .receive(Some(Duration::from_millis(200)), None)
+        .unwrap()
+        .is_none());
+    std::fs::write(&path, format!("{names}Unselected new device\nFuture1\n")).unwrap();
+    let Some(InputItem::Message(message)) =
+        input.receive(Some(Duration::from_secs(3)), None).unwrap()
+    else {
+        panic!("new matching input expected")
+    };
+    assert_eq!(message.port().unwrap().name, "Future1");
+    assert!(input
+        .receive(Some(Duration::from_millis(200)), None)
+        .unwrap()
+        .is_none());
+    input.close().unwrap();
+}
+
+#[test]
+fn an_empty_input_selection_never_falls_back_to_all_ports() {
+    let _serial = SERIAL.lock().unwrap();
+    let mut input = Input::new()
+        .raw()
+        .unwrap()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(options("early"))
+        .unwrap()
+        .with_ports(std::iter::empty::<String>())
+        .unwrap();
+    assert!(input
+        .receive(Some(Duration::from_millis(200)), None)
+        .unwrap()
+        .is_none());
+    input.close().unwrap();
+    assert!(Input::new().with_ports(["Keyboard", ""]).is_err());
+}
+
+#[test]
 fn all_port_recording_marks_pending_fragments_incomplete_without_completed_messages() {
     let _serial = SERIAL.lock().unwrap();
     let mut input = Input::new()

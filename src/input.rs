@@ -125,7 +125,7 @@ impl Input {
             },
         )
     }
-    #[pyo3(signature=(callback,stream,sysex_limit,raw))]
+    #[pyo3(signature=(callback,stream,sysex_limit,raw,patterns))]
     fn listen_all(
         slf: Py<Self>,
         py: Python<'_>,
@@ -133,8 +133,9 @@ impl Input {
         stream: String,
         sysex_limit: usize,
         raw: bool,
+        patterns: Option<Vec<String>>,
     ) -> PyResult<Py<AllInputConnection>> {
-        AllInputConnection::open(py, slf, callback, stream, sysex_limit, raw)
+        AllInputConnection::open(py, slf, callback, stream, sysex_limit, raw, patterns)
     }
     fn create_virtual(
         slf: Py<Self>,
@@ -397,6 +398,7 @@ impl AllInputConnection {
         stream: String,
         sysex_limit: usize,
         raw: bool,
+        patterns: Option<Vec<String>>,
     ) -> PyResult<Py<Self>> {
         let time_origin = (
             std::time::Instant::now(),
@@ -431,30 +433,38 @@ impl AllInputConnection {
             resource.connect(|native| {
                 let group_clock = format!("{stream}/clock");
                 let input = native
-                    .connect_all(stream, sysex_limit, raw, subprocess, move |item| {
-                        callback.deliver(move |py| match item {
-                            transport::all::AllItem::Decoded(item) => crate::live::item(py, item),
-                            transport::all::AllItem::Raw(
-                                middy::events::InputItem::Diagnostic(value),
-                                _,
-                            ) => Ok(
-                                Py::new(py, crate::live::StreamDiagnostic { value })?.into_any()
-                            ),
-                            transport::all::AllItem::Raw(
-                                middy::events::InputItem::Message(packet),
-                                clock,
-                            ) => Ok(Py::new(
-                                py,
-                                ReceivedPacket {
-                                    sequence: Some(packet.sequence),
-                                    timestamp_ns: packet.timestamp_ns,
-                                    clock: Clock { value: clock },
-                                    packet: packet.packet,
-                                },
-                            )?
-                            .into_any()),
-                        });
-                    })
+                    .connect_all(
+                        stream,
+                        sysex_limit,
+                        raw,
+                        subprocess,
+                        patterns,
+                        move |item| {
+                            callback.deliver(move |py| match item {
+                                transport::all::AllItem::Decoded(item) => {
+                                    crate::live::item(py, item)
+                                }
+                                transport::all::AllItem::Raw(
+                                    middy::events::InputItem::Diagnostic(value),
+                                    _,
+                                ) => Ok(Py::new(py, crate::live::StreamDiagnostic { value })?
+                                    .into_any()),
+                                transport::all::AllItem::Raw(
+                                    middy::events::InputItem::Message(packet),
+                                    clock,
+                                ) => Ok(Py::new(
+                                    py,
+                                    ReceivedPacket {
+                                        sequence: Some(packet.sequence),
+                                        timestamp_ns: packet.timestamp_ns,
+                                        clock: Clock { value: clock },
+                                        packet: packet.packet,
+                                    },
+                                )?
+                                .into_any()),
+                            });
+                        },
+                    )
                     .map_err(|e| transport_error(e, "open"))?;
                 connection
                     .get()

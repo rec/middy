@@ -147,6 +147,10 @@ By default, `Input()` listens to all visible inputs of the selected backend and
 encoding, checking every 100 ms for newly connected or removed ports. It opens
 even with no devices present. A port pattern or explicit discovery snapshot
 selects one input. Each connection has its own decoder, stream and clock.
+`Input(port=["Keyboard *", "Pad[12]"])` follows the union of matching names,
+including future connections. Rust uses `.with_ports(["Keyboard *", "Pad[12]"])?`.
+Entries use the same case-sensitive substring/shell matching as a single selector;
+overlaps open each port once. An empty collection selects none; omission selects all.
 `Message.port` is an optional `PortInfo` description: name, backend, backend ID
 and connection identity. Names and backend IDs need not be unique; the identity
 distinguishes connections and changes on reconnection. Rust exposes the same

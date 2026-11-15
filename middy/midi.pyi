@@ -83,7 +83,7 @@ class Port:
 class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
     raw: bool
     channel: int | list[int | None] | None
-    port: str | None
+    port: str | list[str] | None
     event_limit: int
     sysex_limit: int
     encoding: Encoding
@@ -101,7 +101,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
         *,
         raw: Literal[True],
         channel: int | Iterable[int | None] | None = None,
-        port: str | None = None,
+        port: str | Iterable[str] | None = None,
         encoding: Encoding = Encoding.Bytes,
         backend: Backend | None = None,
         timestamps: TimestampMode = TimestampMode.Absolute,
@@ -119,7 +119,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
         *,
         raw: Literal[False] = False,
         channel: int | Iterable[int | None] | None = None,
-        port: str | None = None,
+        port: str | Iterable[str] | None = None,
         encoding: Encoding = Encoding.Bytes,
         backend: Backend | None = None,
         timestamps: TimestampMode = TimestampMode.Absolute,
@@ -137,7 +137,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
         *,
         raw: bool,
         channel: int | Iterable[int | None] | None = None,
-        port: str | None = None,
+        port: str | Iterable[str] | None = None,
         encoding: Encoding = Encoding.Bytes,
         backend: Backend | None = None,
         timestamps: TimestampMode = TimestampMode.Absolute,

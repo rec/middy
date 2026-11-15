@@ -896,7 +896,7 @@ pub fn select_port_index<'a>(
     if pattern.is_empty() {
         return Err(invalid("port pattern must not be empty"));
     }
-    let mut matches = names.filter(|(_, n)| n.contains(pattern) || wildcard(pattern, n));
+    let mut matches = names.filter(|(_, n)| port_matches(pattern, n));
     let (index, _) = matches
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no matching MIDI port"))?;
@@ -904,6 +904,9 @@ pub fn select_port_index<'a>(
         return Err(invalid("port pattern matches multiple ports"));
     }
     Ok(index)
+}
+pub(crate) fn port_matches(pattern: &str, name: &str) -> bool {
+    name.contains(pattern) || wildcard(pattern, name)
 }
 fn wildcard(pattern: &str, name: &str) -> bool {
     let p: Vec<_> = pattern.chars().collect();

@@ -31,7 +31,7 @@ pub(super) struct Core {
     options: transport::InputOptions,
     run_in_subprocess: bool,
     subprocess_options: transport::subprocess::SubprocessOptions,
-    port: Option<String>,
+    port: Option<PortSelection>,
     channels: Option<u32>,
     sysex_limit: usize,
     queue: Arc<Queue>,
@@ -50,6 +50,10 @@ pub(super) struct Core {
     native_clock: Option<transport::Clock>,
     recording: Option<recording::Attachment>,
     recording_report: Option<crate::archive::RecordingReport>,
+}
+enum PortSelection {
+    One(String),
+    Many(Vec<String>),
 }
 
 /// Borrowed input iteration that retains decoding diagnostics and terminal errors.
@@ -78,6 +82,10 @@ impl Core {
                 self.raw,
                 self.run_in_subprocess
                     .then(|| self.subprocess_options.clone()),
+                match &self.port {
+                    Some(PortSelection::Many(patterns)) => Some(patterns.clone()),
+                    _ => None,
+                },
                 move |item| {
                     let size = all_size(&item);
                     let mut state = queue.0.lock().unwrap_or_else(|p| p.into_inner());
@@ -226,7 +234,21 @@ impl Core {
         if pattern.is_empty() {
             return Err(invalid("port pattern must not be empty").into());
         }
-        self.port = Some(pattern);
+        self.port = Some(PortSelection::One(pattern));
+        Ok(self)
+    }
+    pub fn with_ports(
+        mut self,
+        patterns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> crate::midi::Result<Self> {
+        if self.connection.is_some() || self.all_connection.is_some() || self.closed {
+            return Err(invalid("input is connected or closed").into());
+        }
+        let patterns: Vec<String> = patterns.into_iter().map(Into::into).collect();
+        if patterns.iter().any(String::is_empty) {
+            return Err(invalid("port pattern must not be empty").into());
+        }
+        self.port = Some(PortSelection::Many(patterns));
         Ok(self)
     }
     pub fn with_run_in_subprocess(mut self, enabled: bool) -> crate::midi::Result<Self> {
@@ -508,11 +530,12 @@ impl Core {
     }
     fn open(&mut self) -> io::Result<()> {
         if self.decoder.is_none() && !self.closed {
-            if self.port.is_none() {
+            let Some(PortSelection::One(pattern)) = &self.port else {
                 return self.open_all();
-            }
+            };
+            let pattern = pattern.clone();
             let ports = self.ports()?;
-            let port = select_port(&ports, self.port.as_deref())?;
+            let port = select_port(&ports, Some(&pattern))?;
             self.open_connection(Some(port), "")?;
         }
         Ok(())
