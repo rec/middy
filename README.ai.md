@@ -888,11 +888,16 @@ budgets. Floods and allocation/process aborts remain possible.
 
 Finalization attempts close and releases the public resource. Native retirement
 can complete asynchronously; explicit close or a context gives checked cleanup.
-Finalization is not guaranteed and in-process close can wait for a driver. Failed checked cleanup retains native state and its owner thread until
-process exit without retry. The Rust core permits 32 native clients per process,
-including retained clients; the Python cleanup registry permits 32 connections
+Finalization is not guaranteed and in-process close can wait for a driver. If
+checked native teardown fails, middy reports the error and retains the native
+state and its owner thread until process exit. This keeps callback state alive
+while the driver may still refer to it. Each retained client continues to use
+one of the 32 native client slots in that process. The Python cleanup registry permits 32 connections
 and has four workers. Stalled callbacks or teardown can occupy all cleanup
 workers. There is no global quota across isolated processes.
+
+middy supports one CPython interpreter lifetime per process. Embedding applications
+that finalize CPython must start a new process to use middy again.
 
 Importing middy eagerly loads public submodules and validates interpreter
 compatibility, without starting cleanup workers or opening a MIDI device.
