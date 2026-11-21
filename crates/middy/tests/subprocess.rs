@@ -89,7 +89,11 @@ fn sent_to(log: &std::path::Path, name: &str) -> Vec<String> {
 fn inputs_and_outputs_share_polling_and_sending_does_not_trigger_scans() {
     use std::collections::BTreeMap;
     let _serial = SERIAL.lock().unwrap();
-    let (_, log, worker) = output_fixture("Synth\n");
+    let mut names = String::from("Synth\n");
+    for n in 0..256 {
+        names.push_str(&format!("Pad {n}\n"));
+    }
+    let (_, log, worker) = output_fixture(&names);
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
     for _ in 0..3 {
@@ -395,6 +399,80 @@ fn broadcast_failure_reports_destinations_and_partial_command_progress() {
     }
 }
 #[test]
+fn a_second_indistinguishable_endpoint_stops_following_before_broadcast() {
+    let _serial = SERIAL.lock().unwrap();
+    let (topology, log, worker) = output_fixture("Synth\nOther\n");
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker.clone())
+        .unwrap()
+        .with_port("Synth")
+        .unwrap();
+    output.send(middy::TimingClock::new().unwrap()).unwrap();
+    change_outputs(&topology, &log, "Other\nSynth\nSynth\n");
+    let error = output.send(middy::TimingClock::new().unwrap()).unwrap_err();
+    assert!(error.to_string().contains("ambiguous MIDI port"));
+    assert_eq!(sent_to(&log, "Synth"), ["b:f8"]);
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap();
+    assert!(input
+        .receive(Some(Duration::ZERO), None)
+        .unwrap_err()
+        .to_string()
+        .contains("ambiguous MIDI port"));
+}
+
+#[test]
+fn input_close_waits_for_serial_callbacks_from_two_sources() {
+    use std::sync::mpsc;
+    let _serial = SERIAL.lock().unwrap();
+    let path = fixture().with_extension("callback-ports");
+    write_ports(&path, "Keys\nPad\n");
+    let mut worker = options("hotplug");
+    worker.args.push(path.into_os_string());
+    let (delivered, observed) = mpsc::channel();
+    let (release, gate) = mpsc::channel();
+    let mut first = true;
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_callback(move |item| {
+            if let middy::events::InputItem::Message(message) = item.unwrap() {
+                use middy::messages::Message;
+                delivered
+                    .send(message.port().unwrap().name.clone())
+                    .unwrap();
+                if first {
+                    first = false;
+                    gate.recv_timeout(Duration::from_secs(3)).unwrap();
+                }
+            }
+        })
+        .unwrap();
+    input.stream().unwrap();
+    let first = observed.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (closed, done) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(move || closed.send(input.close()).unwrap());
+        assert!(matches!(
+            done.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(observed.try_recv().is_err());
+        release.send(()).unwrap();
+        done.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    });
+    let second = observed.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_ne!(first, second);
+}
+
+#[test]
 fn default_output_stays_single_and_selected_ump_outputs_do_not_generate_midi1_cleanup() {
     let _serial = SERIAL.lock().unwrap();
     let (_, log, worker) = output_fixture("Synth\nSynth\nOther\n");
@@ -406,7 +484,7 @@ fn default_output_stays_single_and_selected_ump_outputs_do_not_generate_midi1_cl
     output.send(middy::TimingClock::new().unwrap()).unwrap();
     output.close().unwrap();
     assert_eq!(sent_to(&log, "Synth"), ["b:f8"]);
-    let (_, log, worker) = output_fixture("Synth\nSynth\nOther\n");
+    let (_, log, worker) = output_fixture("Synth A\nSynth B\nOther\n");
     let mut output = Output::new()
         .with_transport(transport::OutputOptions {
             encoding: transport::Encoding::Ump,
@@ -423,7 +501,8 @@ fn default_output_stays_single_and_selected_ump_outputs_do_not_generate_midi1_cl
         .send(transport::Packet::Ump(vec![0x20903c64]))
         .unwrap();
     output.close().unwrap();
-    assert_eq!(sent_to(&log, "Synth"), ["u:20903c64", "u:20903c64"]);
+    assert_eq!(sent_to(&log, "Synth A"), ["u:20903c64"]);
+    assert_eq!(sent_to(&log, "Synth B"), ["u:20903c64"]);
     assert!(sent_to(&log, "Other").is_empty());
 }
 #[test]
@@ -636,7 +715,7 @@ fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings()
     let recorder = input
         .start(None::<&std::path::Path>, &Default::default())
         .unwrap();
-    write_ports(&path, "Keyboard\nKeyboard\n");
+    write_ports(&path, "Keyboard\nKeyboard B\n");
     let mut ports = Vec::new();
     for _ in 0..2 {
         let InputItem::Message(message) = input
@@ -647,7 +726,7 @@ fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings()
             panic!("message expected")
         };
         let port = message.port().unwrap().clone();
-        assert_eq!(port.name, "Keyboard");
+        assert!(matches!(port.name.as_str(), "Keyboard" | "Keyboard B"));
         ports.push(port);
     }
     assert_ne!(ports[0].identity, ports[1].identity);

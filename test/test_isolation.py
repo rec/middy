@@ -777,7 +777,7 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
         if not callback:
             assert source.receive(timeout=0) is None
         recorder = None if raw else source.start()
-        write_ports(topology, "Keyboard\nKeyboard\n")
+        write_ports(topology, "Keyboard\nKeyboard B\n")
         first = receive()
         second = receive()
         assert isinstance(first, (messages.Message, events.ReceivedPacket))
@@ -785,7 +785,7 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
         if isinstance(first, messages.Message):
             assert isinstance(second, messages.Message)
             assert first.port is not None and second.port is not None
-            assert first.port.name == second.port.name == "Keyboard"
+            assert {first.port.name, second.port.name} == {"Keyboard", "Keyboard B"}
             assert first.port.backend_id == second.port.backend_id == 0
             assert first.port.identity != second.port.identity
             assert first.stream != second.stream
@@ -1056,14 +1056,15 @@ def test_broadcast_failure_preserves_device_and_command_progress_and_cleans_othe
     assert isinstance(output.worker_failure, midi.BroadcastSendError)
 
 
-def test_output_selection_distinguishes_duplicates_and_rejects_sending_to_no_ports(
+def test_output_selection_rejects_duplicates_and_rejects_sending_to_no_ports(
     output_topology: tuple[Path, Path],
 ) -> None:
     topology, log = output_topology
     topology.write_text("Synth\nSynth\nOther\n")
-    with midi.Output(port=["Synth", "Synth*"], run_in_subprocess=True) as output:
-        output.send(messages.TimingClock())
-    assert output_packets(log) == [("Synth", "b:f8"), ("Synth", "b:f8")]
+    with pytest.raises(ValueError, match="ambiguous MIDI port"):
+        with midi.Output(port=["Synth", "Synth*"], run_in_subprocess=True) as output:
+            output.send(messages.TimingClock())
+    assert output_packets(log) == []
     empty = midi.Output(port=[], run_in_subprocess=True)
     with pytest.raises(ValueError, match="no matching"):
         empty.send(messages.TimingClock())

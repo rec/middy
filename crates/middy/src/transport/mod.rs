@@ -176,26 +176,37 @@ pub struct Port {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct PortKey {
     pub name: String,
     pub id: u64,
-    pub occurrence: usize,
+}
+impl PortKey {
+    fn ambiguous(&self) -> Error {
+        Error::Invalid(format!(
+            "ambiguous MIDI port {:?} with backend ID {}; connect a discovery snapshot to select one endpoint",
+            self.name, self.id
+        ))
+    }
+    pub(crate) fn resolve<'a>(&self, ports: &'a [Port]) -> Result<Option<&'a Port>> {
+        let mut matches = ports
+            .iter()
+            .filter(|p| p.name == self.name && p.backend_id == self.id);
+        let port = matches.next();
+        if matches.next().is_some() {
+            return Err(self.ambiguous());
+        }
+        Ok(port)
+    }
 }
 pub(crate) fn port_keys(ports: &[Port]) -> Vec<PortKey> {
-    let mut result: Vec<PortKey> = Vec::new();
-    for port in ports {
-        let occurrence = result
-            .iter()
-            .filter(|p| p.name == port.name && p.id == port.backend_id)
-            .count();
-        result.push(PortKey {
-            name: port.name.clone(),
-            id: port.backend_id,
-            occurrence,
-        });
-    }
-    result
+    ports
+        .iter()
+        .map(|p| PortKey {
+            name: p.name.clone(),
+            id: p.backend_id,
+        })
+        .collect()
 }
 
 impl Port {
@@ -818,6 +829,35 @@ const UMP_WORDS: [usize; 16] = [1, 1, 1, 2, 2, 4, 1, 1, 2, 2, 2, 3, 3, 4, 4, 4];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopening_checks_the_fresh_catalog_before_choosing_an_endpoint() {
+        let port = Port {
+            owner: Weak::new(),
+            generation: 1,
+            index: 0,
+            backend: Backend::CoreMidi,
+            backend_id: 7,
+            name: "Keys".into(),
+        };
+        let mut other = port.clone();
+        other.backend_id = 8;
+        other.index = 1;
+        let key = PortKey {
+            name: "Keys".into(),
+            id: 7,
+        };
+        assert_eq!(
+            key.resolve(&[other.clone(), port.clone()]).unwrap(),
+            Some(&port)
+        );
+        assert!(key.resolve(std::slice::from_ref(&other)).unwrap().is_none());
+        other.backend_id = 7;
+        assert!(matches!(
+            key.resolve(&[other, port]),
+            Err(Error::Invalid(_))
+        ));
+    }
 
     #[test]
     fn convenience_selection_requires_a_unique_pattern_match() {

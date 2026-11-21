@@ -250,7 +250,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
         | archive.Discontinuity
         | archive.Metadata
     ]:
-        """Capture to memory and close the input; use file_io.write to save records."""
+        """Capture to memory and close the input; use middy.write to save records."""
         seconds = _units.real(duration, "second")
         if not math.isfinite(seconds) or seconds < 0:
             raise ValueError("duration must be finite and nonnegative")
@@ -945,6 +945,13 @@ class _OutputState:
 
 
 class _InputState[T = messages.Message | events.StreamDiagnostic]:
+    """Own the live transport, callback bridge and attached recorder for one Input.
+
+    Input.close() prevents reopening. This state closes the transport, accounts
+    for final loss and partial packets, drains callbacks, then stops the recorder.
+    A transport close error and a recording cleanup error are reported together.
+    """
+
     _all: bool
     _port: events.PortInfo | None
     _port_name: str

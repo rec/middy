@@ -329,6 +329,8 @@ impl<T: Send + 'static> Input<T> {
         Ok(self)
     }
     /// Configure a serial callback before opening. Panic stops input permanently.
+    /// Return promptly: a slow handler delays other sources on this input.
+    /// Close drains outstanding callback work and waits for the handler to return.
     pub fn with_callback(
         mut self,
         callback: impl FnMut(midi::Result<Item<T>>) + Send + 'static,

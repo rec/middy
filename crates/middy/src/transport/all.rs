@@ -19,22 +19,21 @@ impl<C> Topology<C> {
         visible: Vec<PortKey>,
         mut open: impl FnMut(&PortKey) -> Result<Option<C>>,
     ) -> Result<Vec<C>> {
+        use std::collections::HashSet;
+        let existing: HashSet<_> = self.sources.iter().map(|(key, _)| key.clone()).collect();
         for key in &visible {
-            if !self.sources.iter().any(|(k, _)| k == key) {
+            if !existing.contains(key) {
                 if let Some(source) = open(key)? {
                     self.sources.push((key.clone(), source));
                 }
             }
         }
-        let mut removed = Vec::new();
-        let mut i = 0;
-        while i < self.sources.len() {
-            if visible.contains(&self.sources[i].0) {
-                i += 1;
-            } else {
-                removed.push(self.sources.remove(i).1);
-            }
-        }
+        let visible: HashSet<_> = visible.into_iter().collect();
+        let removed = self
+            .sources
+            .extract_if(.., |(key, _)| !visible.contains(key))
+            .map(|(_, source)| source)
+            .collect();
         Ok(removed)
     }
 }
@@ -194,6 +193,8 @@ impl Drop for AllInputConnection {
     }
 }
 impl Input {
+    /// Sources share a serial delivery callback. Return promptly so other sources
+    /// can deliver packets and close can finish draining accepted deliveries.
     pub fn connect_all(
         self,
         stream: String,
@@ -243,166 +244,157 @@ impl Input {
                 let mut topology = Topology {
                     sources: Vec::<(PortKey, Source)>::new(),
                 };
+                let mut reconciled_ports = None;
                 let mut initialized = false;
                 let mut retired_loss = 0u64;
                 let result = (|| {
+                    let open = |key: &PortKey| {
+                        let client = if let Some(subprocess) = &subprocess {
+                            Input::new_subprocess(options, subprocess.clone())?
+                        } else {
+                            Input::new(options)?
+                        };
+                        let ports = client.ports()?;
+                        let Some(port) = key.resolve(&ports)? else {
+                            return Ok(None);
+                        };
+                        let info = events::PortInfo::new(
+                            port.name().into(),
+                            port.backend(),
+                            port.backend_id(),
+                        )
+                        .map_err(|e| Error::Resource(e.to_string()))?;
+                        let source_stream = format!("{stream}/{}", info.identity);
+                        let enabled = options.timestamps == TimestampMode::Absolute;
+                        let clock = events::Clock::new(
+                            format!("{source_stream}/clock"),
+                            1,
+                            1_000_000_000,
+                            if enabled {
+                                "backend_absolute"
+                            } else {
+                                "disabled"
+                            }
+                            .into(),
+                            None,
+                        )
+                        .map_err(|e| Error::Invalid(e.to_string()))?
+                        .with_transport(options.backend.unwrap() as i32, enabled);
+                        let decoder = Arc::new(Mutex::new(SourceDecoder {
+                            decoder: live::Decoder::new(
+                                source_stream.clone(),
+                                options.encoding,
+                                sysex_limit,
+                            )
+                            .map_err(|e| Error::Invalid(e.to_string()))?
+                            .with_port(info),
+                            expected: 0,
+                            reported_loss: 0,
+                        }));
+                        let decode = Arc::clone(&decoder);
+                        let deliver = Arc::clone(&delivery);
+                        let source_clock = clock.clone();
+                        let last_message = Arc::clone(&last_message);
+                        let pending = Arc::clone(&pending_sources);
+                        let callback_stream = source_stream.clone();
+                        let connection = client.connect(port, move |packet| {
+                            *last_message.lock().unwrap_or_else(|p| p.into_inner()) =
+                                Some(std::time::Instant::now());
+                            let mut decoder = decode.lock().unwrap_or_else(|p| p.into_inner());
+                            let gap = packet.sequence.saturating_sub(decoder.expected);
+                            decoder.reported_loss = decoder.reported_loss.saturating_add(gap);
+                            decoder.expected = packet.sequence.saturating_add(1);
+                            if raw {
+                                if gap > 0 {
+                                    (deliver.lock().unwrap_or_else(|p| p.into_inner()))(
+                                        AllItem::Raw(
+                                            live::Item::Diagnostic(live::Diagnostic {
+                                                stream: callback_stream.clone(),
+                                                packet: packet.sequence,
+                                                kind: live::DiagnosticKind::Loss,
+                                                lost: gap,
+                                                reason: "packet sequence gap".into(),
+                                            }),
+                                            source_clock.clone(),
+                                        ),
+                                    );
+                                }
+                                (deliver.lock().unwrap_or_else(|p| p.into_inner()))(AllItem::Raw(
+                                    live::Item::Message(Box::new(packet)),
+                                    source_clock.clone(),
+                                ));
+                            } else {
+                                let before = decoder.decoder.pending();
+                                let values = decoder.decoder.feed(
+                                    &packet.packet,
+                                    &source_clock,
+                                    packet.timestamp_ns,
+                                    Some(packet.sequence),
+                                );
+                                let mut callback =
+                                    deliver.lock().unwrap_or_else(|p| p.into_inner());
+                                match values {
+                                    Ok(values) => {
+                                        for value in values {
+                                            callback(AllItem::Decoded(value));
+                                        }
+                                    }
+                                    Err(error) => callback(AllItem::Decoded(
+                                        live::Item::Diagnostic(live::Diagnostic {
+                                            stream: callback_stream.clone(),
+                                            packet: packet.sequence,
+                                            kind: live::DiagnosticKind::Malformed,
+                                            lost: 0,
+                                            reason: error.to_string(),
+                                        }),
+                                    )),
+                                }
+                                let after = decoder.decoder.pending();
+                                if after && !before {
+                                    pending.fetch_add(1, Ordering::AcqRel);
+                                } else if before && !after {
+                                    pending.fetch_sub(1, Ordering::AcqRel);
+                                }
+                            }
+                        });
+                        let connection = match connection {
+                            Ok(connection) => connection,
+                            Err(_) if !port_keys(&self.ports()?).contains(key) => return Ok(None),
+                            Err(error) => return Err(error),
+                        };
+                        Ok(Some(Source {
+                            pending: Arc::clone(&pending_sources),
+                            connection,
+                            decoder,
+                            stream: source_stream,
+                            clock,
+                            raw,
+                            delivery: Arc::clone(&delivery),
+                        }))
+                    };
                     loop {
                         if stopped.load(Ordering::Acquire) {
                             break;
                         }
                         let snapshot = discovery.snapshot()?;
-                        let visible = snapshot
-                            .ports
-                            .iter()
-                            .filter(|p| {
-                                patterns.as_ref().is_none_or(|patterns| {
-                                    patterns
-                                        .iter()
-                                        .any(|s| crate::output::port_matches(s, &p.name))
-                                })
-                            })
-                            .cloned()
-                            .collect();
-                        let removed = topology.update(visible, |key| {
-                            let client = if let Some(subprocess) = &subprocess {
-                                Input::new_subprocess(options, subprocess.clone())?
-                            } else {
-                                Input::new(options)?
-                            };
-                            let ports = client.ports()?;
-                            let Some(port) = ports
-                                .iter()
-                                .filter(|p| p.name() == key.name && p.backend_id() == key.id)
-                                .nth(key.occurrence)
-                            else {
-                                return Ok(None);
-                            };
-                            let info = events::PortInfo::new(
-                                port.name().into(),
-                                port.backend(),
-                                port.backend_id(),
-                            )
-                            .map_err(|e| Error::Resource(e.to_string()))?;
-                            let source_stream = format!("{stream}/{}", info.identity);
-                            let enabled = options.timestamps == TimestampMode::Absolute;
-                            let clock = events::Clock::new(
-                                format!("{source_stream}/clock"),
-                                1,
-                                1_000_000_000,
-                                if enabled {
-                                    "backend_absolute"
-                                } else {
-                                    "disabled"
-                                }
-                                .into(),
-                                None,
-                            )
-                            .map_err(|e| Error::Invalid(e.to_string()))?
-                            .with_transport(options.backend.unwrap() as i32, enabled);
-                            let decoder = Arc::new(Mutex::new(SourceDecoder {
-                                decoder: live::Decoder::new(
-                                    source_stream.clone(),
-                                    options.encoding,
-                                    sysex_limit,
-                                )
-                                .map_err(|e| Error::Invalid(e.to_string()))?
-                                .with_port(info),
-                                expected: 0,
-                                reported_loss: 0,
-                            }));
-                            let decode = Arc::clone(&decoder);
-                            let deliver = Arc::clone(&delivery);
-                            let source_clock = clock.clone();
-                            let last_message = Arc::clone(&last_message);
-                            let pending = Arc::clone(&pending_sources);
-                            let callback_stream = source_stream.clone();
-                            let connection = client.connect(port, move |packet| {
-                                *last_message.lock().unwrap_or_else(|p| p.into_inner()) =
-                                    Some(std::time::Instant::now());
-                                let mut decoder = decode.lock().unwrap_or_else(|p| p.into_inner());
-                                let gap = packet.sequence.saturating_sub(decoder.expected);
-                                decoder.reported_loss = decoder.reported_loss.saturating_add(gap);
-                                decoder.expected = packet.sequence.saturating_add(1);
-                                if raw {
-                                    if gap > 0 {
-                                        (deliver.lock().unwrap_or_else(|p| p.into_inner()))(
-                                            AllItem::Raw(
-                                                live::Item::Diagnostic(live::Diagnostic {
-                                                    stream: callback_stream.clone(),
-                                                    packet: packet.sequence,
-                                                    kind: live::DiagnosticKind::Loss,
-                                                    lost: gap,
-                                                    reason: "packet sequence gap".into(),
-                                                }),
-                                                source_clock.clone(),
-                                            ),
-                                        );
-                                    }
-                                    (deliver.lock().unwrap_or_else(|p| p.into_inner()))(
-                                        AllItem::Raw(
-                                            live::Item::Message(Box::new(packet)),
-                                            source_clock.clone(),
-                                        ),
-                                    );
-                                } else {
-                                    let before = decoder.decoder.pending();
-                                    let values = decoder.decoder.feed(
-                                        &packet.packet,
-                                        &source_clock,
-                                        packet.timestamp_ns,
-                                        Some(packet.sequence),
-                                    );
-                                    let mut callback =
-                                        deliver.lock().unwrap_or_else(|p| p.into_inner());
-                                    match values {
-                                        Ok(values) => {
-                                            for value in values {
-                                                callback(AllItem::Decoded(value));
-                                            }
-                                        }
-                                        Err(error) => callback(AllItem::Decoded(
-                                            live::Item::Diagnostic(live::Diagnostic {
-                                                stream: callback_stream.clone(),
-                                                packet: packet.sequence,
-                                                kind: live::DiagnosticKind::Malformed,
-                                                lost: 0,
-                                                reason: error.to_string(),
-                                            }),
-                                        )),
-                                    }
-                                    let after = decoder.decoder.pending();
-                                    if after && !before {
-                                        pending.fetch_add(1, Ordering::AcqRel);
-                                    } else if before && !after {
-                                        pending.fetch_sub(1, Ordering::AcqRel);
-                                    }
-                                }
-                            });
-                            let connection = match connection {
-                                Ok(connection) => connection,
-                                Err(_) if !port_keys(&self.ports()?).contains(key) => {
-                                    return Ok(None)
-                                }
-                                Err(error) => return Err(error),
-                            };
-                            Ok(Some(Source {
-                                pending: Arc::clone(&pending_sources),
-                                connection,
-                                decoder,
-                                stream: source_stream,
-                                clock,
-                                raw,
-                                delivery: Arc::clone(&delivery),
-                            }))
-                        })?;
-                        let mut retirement = Ok(());
-                        for source in removed {
-                            let diagnostics = source.connection.diagnostics();
-                            retirement = retirement.and(source.close(true));
-                            retired_loss =
-                                retired_loss.saturating_add(diagnostics.dropped_packets());
+                        if !reconciled_ports
+                            .as_ref()
+                            .is_some_and(|ports| Arc::ptr_eq(ports, &snapshot.ports))
+                        {
+                            let visible = snapshot.selected(patterns.as_deref())?;
+                            let selected_count = visible.len();
+                            let removed = topology.update(visible, &open)?;
+                            let mut retirement = Ok(());
+                            for source in removed {
+                                let diagnostics = source.connection.diagnostics();
+                                retirement = retirement.and(source.close(true));
+                                retired_loss =
+                                    retired_loss.saturating_add(diagnostics.dropped_packets());
+                            }
+                            retirement?;
+                            reconciled_ports = (topology.sources.len() == selected_count)
+                                .then(|| Arc::clone(&snapshot.ports));
                         }
-                        retirement?;
                         let mut count = retired_loss;
                         for (_, source) in &topology.sources {
                             source.connection.check_health()?;
@@ -413,7 +405,7 @@ impl Input {
                             let _ = ready.send(Ok(()));
                             initialized = true;
                         }
-                        discovery.wait(snapshot.revision, &stopped);
+                        discovery.wait(&snapshot.ports, &stopped);
                     }
                     Ok(())
                 })();
@@ -475,12 +467,10 @@ mod tests {
         let a = PortKey {
             name: "Keyboard".into(),
             id: 1,
-            occurrence: 0,
         };
         let b = PortKey {
             name: "Keyboard".into(),
-            id: 1,
-            occurrence: 1,
+            id: 2,
         };
         let mut topology = Topology {
             sources: Vec::new(),

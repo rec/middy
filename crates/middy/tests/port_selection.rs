@@ -30,6 +30,7 @@ fn selection_rejects_empty_ambiguous_and_missing_patterns() {
         (vec![], None),
         (vec!["one"], Some("")),
         (vec!["same", "same"], Some("same")),
+        (vec!["Keys[1]", "Keys1"], Some("Keys[1]")),
         (vec!["first", "second"], Some("*")),
         (vec!["one"], Some("two")),
         (vec!["Other"], Some("O[z-a]her")),

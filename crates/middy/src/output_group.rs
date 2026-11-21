@@ -1,5 +1,5 @@
 //! Shared selected-output ownership, per-device cleanup and broadcast progress.
-use super::{port_matches, OutputState};
+use super::OutputState;
 use crate::{
     events::PortInfo,
     messages::{AnyCommand, Command, PrimitiveMessage},
@@ -43,6 +43,7 @@ pub struct OutputGroup {
     subprocess: Option<transport::subprocess::SubprocessOptions>,
     scanner: transport::scanner::Subscription,
     revision: Option<u64>,
+    reconciled_ports: Option<Arc<Vec<transport::PortKey>>>,
     backend: transport::Backend,
     destinations: Vec<Destination>,
     failure: Option<Arc<midi::Error>>,
@@ -68,6 +69,7 @@ impl OutputGroup {
             subprocess,
             scanner,
             revision: None,
+            reconciled_ports: None,
             backend,
             destinations: Vec::new(),
             failure: None,
@@ -80,29 +82,34 @@ impl OutputGroup {
     }
     fn refresh(&mut self) -> midi::Result<()> {
         let snapshot = self.scanner.snapshot().map_err(midi::Error::Connect)?;
-        if self.revision == Some(snapshot.revision) {
+        if self.revision == Some(snapshot.revision)
+            || self
+                .reconciled_ports
+                .as_ref()
+                .is_some_and(|ports| Arc::ptr_eq(ports, &snapshot.ports))
+        {
             return Ok(());
         }
-        let visible: Vec<_> = snapshot
-            .ports
-            .iter()
-            .filter(|p| self.patterns.iter().any(|s| port_matches(s, &p.name)))
-            .cloned()
-            .collect();
-        let mut i = 0;
-        while i < self.destinations.len() {
-            if visible.contains(&self.destinations[i].key) {
-                i += 1;
-            } else {
-                let removed = self.destinations.remove(i);
-                if let Err(error) = removed.close() {
-                    super::report(&error);
-                }
+        let visible = snapshot
+            .selected(Some(&self.patterns))
+            .map_err(midi::Error::Connect)?;
+        let visible_keys: std::collections::HashSet<_> = visible.iter().collect();
+        for removed in self
+            .destinations
+            .extract_if(.., |dest| !visible_keys.contains(&dest.key))
+        {
+            if let Err(error) = removed.close() {
+                super::report(&error);
             }
         }
         let total_ports = visible.len();
+        let connected: std::collections::HashSet<_> = self
+            .destinations
+            .iter()
+            .map(|dest| dest.key.clone())
+            .collect();
         for key in visible {
-            if self.destinations.iter().any(|p| p.key == key) {
+            if connected.contains(&key) {
                 continue;
             }
             let info = PortInfo::new(key.name.clone(), self.backend, key.id)?;
@@ -118,11 +125,7 @@ impl OutputGroup {
                 }
                 .map_err(midi::Error::Init)?;
                 let snapshots = child.ports().map_err(midi::Error::Connect)?;
-                let Some(selected) = snapshots
-                    .iter()
-                    .filter(|p| p.name() == key.name && p.backend_id() == key.id)
-                    .nth(key.occurrence)
-                else {
+                let Some(selected) = key.resolve(&snapshots).map_err(midi::Error::Connect)? else {
                     return Ok(None);
                 };
                 let connection = child.connect(selected).map_err(midi::Error::Connect)?;
@@ -148,6 +151,7 @@ impl OutputGroup {
                 }
             }
         }
+        self.reconciled_ports = (self.destinations.len() == total_ports).then_some(snapshot.ports);
         self.revision = Some(snapshot.revision);
         Ok(())
     }

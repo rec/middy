@@ -66,6 +66,26 @@ pub(crate) struct Snapshot {
     pub revision: u64,
     pub ports: Arc<Vec<PortKey>>,
 }
+impl Snapshot {
+    pub fn selected(&self, patterns: Option<&[String]>) -> Result<Vec<PortKey>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut selected = Vec::new();
+        for port in self.ports.iter().filter(|p| {
+            patterns.is_none_or(|patterns| {
+                patterns
+                    .iter()
+                    .any(|pattern| crate::output::port_matches(pattern, &p.name))
+            })
+        }) {
+            if !seen.insert(port) {
+                return Err(port.ambiguous());
+            }
+            selected.push(port.clone());
+        }
+        Ok(selected)
+    }
+}
+
 struct Schedule {
     interval: Duration,
     next: Instant,
@@ -174,10 +194,10 @@ impl Subscription {
             .unwrap()
             .clone()
     }
-    pub fn wait(&self, revision: u64, stopped: &AtomicBool) {
+    pub fn wait(&self, ports: &Arc<Vec<PortKey>>, stopped: &AtomicBool) {
         let shared = &self.0.shared;
         let state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
-        if matches!(&*state, Some(Ok(s)) if s.revision == revision)
+        if matches!(&*state, Some(Ok(s)) if Arc::ptr_eq(&s.ports, ports))
             && !stopped.load(Ordering::Acquire)
         {
             drop(
@@ -214,12 +234,24 @@ fn poll(key: &Key, shared: &Shared) -> Result<()> {
                 Some(Ok(previous)) => previous.revision.wrapping_add(1),
                 _ => 0,
             };
-            let ports = match state.as_ref() {
-                Some(Ok(previous)) if *previous.ports == ports => previous.ports.clone(),
-                _ => Arc::new(ports),
-            };
-            *state = Some(Ok(Snapshot { revision, ports }));
-            shared.changed.notify_all();
+            if let Some(Ok(previous)) = state.as_mut() {
+                if *previous.ports == ports {
+                    // An open that raced a disappearing endpoint can retry after this scan.
+                    previous.revision = revision;
+                } else {
+                    *previous = Snapshot {
+                        revision,
+                        ports: Arc::new(ports),
+                    };
+                    shared.changed.notify_all();
+                }
+            } else {
+                *state = Some(Ok(Snapshot {
+                    revision,
+                    ports: Arc::new(ports),
+                }));
+                shared.changed.notify_all();
+            }
         }
         let mut schedule = shared.schedule.lock().unwrap_or_else(|p| p.into_inner());
         if schedule.next == deadline {

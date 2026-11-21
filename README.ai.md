@@ -68,7 +68,12 @@ existing and future clients: Python accepts seconds or a unit string such as
 positive. Each active backend/direction/worker configuration is enumerated once
 per cycle, regardless of client count. Outputs use its cached topology when
 sending; new devices receive subsequent messages without replay. `connect(snapshot)`
-still selects one discovered device. Empty or currently unmatched selections can
+selects one discovered device. For example, the selector `Keys[1]` matches both
+`Keys[1]` and `Keys1`. To record or send to just the endpoint you inspected,
+pass its snapshot to `client.connect(ports[index])` in Python or
+`client.connect(&ports[index])?` in Rust. If matching endpoints share both a name and a backend ID, the follower
+reports an ambiguous port. Direct snapshot connections still select one endpoint.
+Empty or currently unmatched selections can
 open, but sending with no matching outputs raises an error.
 Raw `NoteOn` values can still overlap, with
 explicit delays and releases. Delays use the same tempo rule as notes and rests.
@@ -769,6 +774,10 @@ that selection without looking it up again by ID. Virtual endpoints use
 `create_virtual(name, callback)` or `create_virtual(name)`. Native client and
 real-connection names are not configurable through the pinned C API. CoreMIDI
 virtual names still use the fork's existing ASCII input conversion.
+
+Each input calls its handler serially across all selected sources. A slow handler
+delays subsequent deliveries and close waits for it to return. Move lengthy work
+out of the callback when timely delivery or shutdown matters.
 
 Decoded callbacks accept a `Message` or `StreamDiagnostic`. With `raw=True`,
 callbacks accept one immutable `ReceivedPacket` from `middy.events`.

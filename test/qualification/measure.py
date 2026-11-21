@@ -14,7 +14,7 @@ from time import perf_counter_ns, process_time_ns, sleep
 
 import pytest
 
-from middy import archive, clip, codecs, events, messages, tuning, ump
+from middy import archive, clip, codecs, events, messages, tuning, ump, universe
 
 
 def emit(name: str, **values: object) -> None:
@@ -195,6 +195,31 @@ def test_clip_and_archive(tmp_path: Path) -> None:
         clip_bytes=(tmp_path / "score.midi2").stat().st_size,
         durable_flush=False,
     )
+
+
+def test_in_memory_recording_growth() -> None:
+    clock = events.Clock(identity="capture")
+    recorder = archive.Recorder(clock=clock, stream="keys")
+    note = messages.NoteOn(60)
+    for n in range(32768):
+        assert recorder.record(
+            note.replace(
+                stream="keys", timestamp=events.Timestamp(ticks=n, clock=clock)
+            )
+        )
+    report = recorder.stop()
+    assert report.complete and report.records == 32770
+    emit("memory_recording", events=32768, records=report.records)
+
+
+def test_parameter_cache_growth() -> None:
+    cache = universe.Universe()
+    for parameter in range(4096):
+        for controller, value in ((99, parameter >> 7), (98, parameter & 127), (6, 42)):
+            cache.feed(messages.ControlChange(controller, value, 1))
+    count = len(cache.snapshot().parameters)
+    assert count == 4096
+    emit("parameter_cache", parameters=count, control_changes=3 * count)
 
 
 def test_recording_admission(tmp_path: Path) -> None:
