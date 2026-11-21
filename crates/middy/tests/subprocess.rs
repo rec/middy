@@ -264,6 +264,44 @@ fn scan_interval_changes_existing_and_future_inputs_and_outputs() {
     output.close().unwrap();
 }
 #[test]
+fn blocked_input_scan_allows_interval_changes_and_output_discovery() {
+    let _serial = SERIAL.lock().unwrap();
+    let (topology, log, mut worker) = output_fixture("Synth\n");
+    worker.timeout = Duration::from_secs(4);
+    let mut input = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker.clone())
+        .unwrap()
+        .with_port(std::iter::empty::<&str>())
+        .unwrap();
+    input.receive(Some(Duration::ZERO), None).unwrap();
+    write_ports(&topology, "!wait!\n");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !std::fs::read_to_string(log.with_extension("scans"))
+        .unwrap()
+        .contains("!wait!")
+    {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let start = Instant::now();
+    middy::set_scan_interval(Duration::from_millis(100)).unwrap();
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port("!wait!")
+        .unwrap();
+    output.send(middy::TimingClock::new().unwrap()).unwrap();
+    assert!(start.elapsed() < Duration::from_secs(2));
+    write_ports(&topology, "Synth\n");
+    input.close().unwrap();
+    output.close().unwrap();
+}
+
+#[test]
 fn shared_scan_failure_reaches_each_input_subscriber() {
     let _serial = SERIAL.lock().unwrap();
     let (topology, _, worker) = output_fixture("Synth\n");
@@ -285,6 +323,21 @@ fn shared_scan_failure_reaches_each_input_subscriber() {
             .receive(Some(Duration::from_secs(3)), None)
             .unwrap_err();
         assert!(error.to_string().contains("device enumeration failed"));
+    }
+    write_ports(&topology, "Synth\n");
+    let mut reopened = Input::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port(std::iter::empty::<&str>())
+        .unwrap();
+    assert!(reopened
+        .receive(Some(Duration::ZERO), None)
+        .unwrap()
+        .is_none());
+    reopened.close().unwrap();
+    for input in &mut inputs {
         let _ = input.close();
     }
 }

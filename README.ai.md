@@ -60,8 +60,8 @@ An explicit Output(channel=N) overrides MIDI 1 message and note channels.
 collection such as `["Synth *", "Pad[12]"]`. Rust accepts the same selectors via
 `with_port`. Matching is the union of case-sensitive name substrings and shell
 patterns, with overlapping matches opened once. Omitting `port` selects the first
-output. Inputs and selected outputs share one process-wide device scanner, polling
-every 100 ms by default. `set_scan_interval` changes the process-wide interval for
+output. Clients sharing a backend, direction and worker configuration share a polling
+thread. Other catalogs poll independently. The default interval is 100 ms. `set_scan_interval` changes the process-wide interval for
 existing and future clients: Python accepts seconds or a unit string such as
 `md.set_scan_interval("250 ms")`; Rust uses
 `middy::set_scan_interval(Duration::from_millis(250))?`. The interval must be

@@ -133,6 +133,12 @@ fn main() {
                         .unwrap();
                     let ports = std::fs::read_to_string(path).unwrap();
                     scan_log(input, &ports);
+                    if input && ports == "!wait!\n" {
+                        let path = std::env::args().nth(2).unwrap();
+                        while std::fs::read_to_string(&path).unwrap() == ports {
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                    }
                     if ports == "!fail!\n" {
                         error("native", "device enumeration failed", false, 0);
                         continue;

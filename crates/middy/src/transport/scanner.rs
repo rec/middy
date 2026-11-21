@@ -1,6 +1,6 @@
-//! One process-wide polling loop, with one catalog per active backend/direction/worker.
+//! One independent polling worker per active backend/direction/worker configuration.
 use super::{subprocess::SubprocessOptions, *};
-use std::sync::{atomic::AtomicBool, mpsc, Condvar, OnceLock};
+use std::sync::{atomic::AtomicBool, Condvar, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -17,28 +17,41 @@ pub fn set_scan_interval(interval: Duration) -> Result<()> {
     if interval.as_nanos() > u128::from(u64::MAX) {
         return Err(Error::Invalid("scan interval is out of range".into()));
     }
-    let (reply, response) = mpsc::sync_channel(1);
-    sender()?
-        .send(Request::Interval { interval, reply })
-        .map_err(|_| Error::Worker("device scanner stopped".into()))?;
-    response
-        .recv()
-        .map_err(|_| Error::Worker("device scanner stopped".into()))?
+    let next = Instant::now()
+        .checked_add(interval)
+        .ok_or_else(|| Error::Invalid("scan interval is out of range".into()))?;
+    let mut registry = registry().lock().unwrap_or_else(|p| p.into_inner());
+    registry.interval = interval;
+    registry.entries.retain(|(_, weak)| {
+        let Some(catalog) = weak.upgrade() else {
+            return false;
+        };
+        let mut schedule = catalog
+            .shared
+            .schedule
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        schedule.interval = interval;
+        schedule.next = next;
+        catalog.shared.timer.notify_one();
+        true
+    });
+    Ok(())
 }
 
-fn sender() -> Result<&'static mpsc::Sender<Request>> {
-    static SCANNER: OnceLock<Result<mpsc::Sender<Request>>> = OnceLock::new();
-    SCANNER
-        .get_or_init(|| {
-            let (sender, receiver) = mpsc::channel();
-            thread::Builder::new()
-                .name("middy-device-scanner".into())
-                .spawn(move || run(receiver))
-                .map_err(|e| Error::Worker(e.to_string()))?;
-            Ok(sender)
+struct Registry {
+    interval: Duration,
+    entries: Vec<(Key, Weak<Catalog>)>,
+}
+
+fn registry() -> &'static Mutex<Registry> {
+    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| {
+        Mutex::new(Registry {
+            interval: DEFAULT_INTERVAL,
+            entries: Vec::new(),
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    })
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -53,11 +66,32 @@ pub(crate) struct Snapshot {
     pub revision: u64,
     pub ports: Arc<Vec<PortKey>>,
 }
-struct Catalog {
-    state: Mutex<Result<Snapshot>>,
-    changed: Condvar,
-    client: Mutex<Option<Client>>,
+struct Schedule {
+    interval: Duration,
+    next: Instant,
+    stopped: bool,
 }
+
+struct Shared {
+    state: Mutex<Option<Result<Snapshot>>>,
+    changed: Condvar,
+    schedule: Mutex<Schedule>,
+    timer: Condvar,
+}
+struct Catalog {
+    shared: Arc<Shared>,
+}
+impl Drop for Catalog {
+    fn drop(&mut self) {
+        self.shared
+            .schedule
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .stopped = true;
+        self.shared.timer.notify_one();
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Subscription(Arc<Catalog>);
 impl Subscription {
@@ -67,55 +101,148 @@ impl Subscription {
         subprocess: Option<SubprocessOptions>,
     ) -> Result<Self> {
         ensure_control_thread()?;
-        let (reply, response) = mpsc::sync_channel(1);
-        sender()?
-            .send(Request::Subscribe {
-                key: Key {
-                    backend,
-                    input,
-                    subprocess,
-                },
-                reply,
-            })
-            .map_err(|_| Error::Worker("device scanner stopped".into()))?;
-        response
-            .recv()
-            .map_err(|_| Error::Worker("device scanner stopped".into()))?
+        let key = Key {
+            backend,
+            input,
+            subprocess,
+        };
+        let mut registry = registry().lock().unwrap_or_else(|p| p.into_inner());
+        registry
+            .entries
+            .retain(|(_, catalog)| catalog.strong_count() != 0);
+        let existing = registry.entries.iter().find_map(|(k, weak)| {
+            if k != &key {
+                return None;
+            }
+            let catalog = weak.upgrade()?;
+            let failed = matches!(
+                *catalog
+                    .shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner()),
+                Some(Err(_))
+            );
+            (!failed).then_some(catalog)
+        });
+        let catalog = if let Some(existing) = existing {
+            existing
+        } else {
+            let shared = Arc::new(Shared {
+                state: Mutex::new(None),
+                changed: Condvar::new(),
+                schedule: Mutex::new(Schedule {
+                    interval: registry.interval,
+                    next: Instant::now(),
+                    stopped: false,
+                }),
+                timer: Condvar::new(),
+            });
+            let catalog = Arc::new(Catalog {
+                shared: shared.clone(),
+            });
+            let worker_key = key.clone();
+            thread::Builder::new()
+                .name("middy-device-scanner".into())
+                .spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        poll(&worker_key, &shared)
+                    }))
+                    .unwrap_or_else(|_| Err(Error::Worker("device scanner panicked".into())));
+                    if let Err(error) = result {
+                        *shared.state.lock().unwrap_or_else(|p| p.into_inner()) = Some(Err(error));
+                        shared.changed.notify_all();
+                    }
+                })
+                .map_err(|e| Error::Worker(e.to_string()))?;
+            registry.entries.push((key, Arc::downgrade(&catalog)));
+            catalog
+        };
+        drop(registry);
+        let subscription = Self(catalog);
+        subscription.snapshot()?;
+        Ok(subscription)
     }
     pub fn snapshot(&self) -> Result<Snapshot> {
-        self.0
-            .state
-            .lock()
+        let shared = &self.0.shared;
+        let state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        shared
+            .changed
+            .wait_while(state, |s| s.is_none())
             .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .unwrap()
             .clone()
     }
     pub fn wait(&self, revision: u64, stopped: &AtomicBool) {
-        let state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
-        if matches!(&*state, Ok(s) if s.revision == revision) && !stopped.load(Ordering::Acquire) {
+        let shared = &self.0.shared;
+        let state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+        if matches!(&*state, Some(Ok(s)) if s.revision == revision)
+            && !stopped.load(Ordering::Acquire)
+        {
             drop(
-                self.0
+                shared
                     .changed
-                    // Keep health checks responsive even with slow device polling.
                     .wait_timeout(state, Duration::from_millis(100))
                     .unwrap_or_else(|p| p.into_inner()),
             );
         }
     }
     pub fn wake(&self) {
-        // Pair notification with the waiter's lock so close cannot lose a wakeup.
-        let _state = self.0.state.lock().unwrap_or_else(|p| p.into_inner());
-        self.0.changed.notify_all();
+        let _state = self
+            .0
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        self.0.shared.changed.notify_all();
     }
 }
-enum Request {
-    Subscribe {
-        key: Key,
-        reply: mpsc::SyncSender<Result<Subscription>>,
-    },
-    Interval {
-        interval: Duration,
-        reply: mpsc::SyncSender<Result<()>>,
-    },
+
+fn poll(key: &Key, shared: &Shared) -> Result<()> {
+    let mut deadline = shared
+        .schedule
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .next;
+    let client = Client::new(key)?;
+    loop {
+        let ports = client.ports()?;
+        {
+            let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
+            let revision = match state.as_ref() {
+                Some(Ok(previous)) => previous.revision.wrapping_add(1),
+                _ => 0,
+            };
+            let ports = match state.as_ref() {
+                Some(Ok(previous)) if *previous.ports == ports => previous.ports.clone(),
+                _ => Arc::new(ports),
+            };
+            *state = Some(Ok(Snapshot { revision, ports }));
+            shared.changed.notify_all();
+        }
+        let mut schedule = shared.schedule.lock().unwrap_or_else(|p| p.into_inner());
+        if schedule.next == deadline {
+            schedule.next = Instant::now()
+                .checked_add(schedule.interval)
+                .ok_or_else(|| Error::Invalid("scan interval is out of range".into()))?;
+        }
+        while !schedule.stopped {
+            let remaining = schedule.next.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            schedule = shared
+                .timer
+                .wait_timeout(schedule, remaining)
+                .unwrap_or_else(|p| p.into_inner())
+                .0;
+        }
+        deadline = schedule.next;
+        if schedule.stopped {
+            return Ok(());
+        }
+    }
 }
 enum Client {
     Input(Input),
@@ -152,127 +279,5 @@ impl Client {
             Self::Output(client) => client.ports(),
         }?;
         Ok(port_keys(&ports))
-    }
-}
-struct Entry {
-    key: Key,
-    catalog: Weak<Catalog>,
-}
-impl Entry {
-    fn new(key: Key) -> Result<(Self, Subscription)> {
-        let client = Client::new(&key)?;
-        let catalog = Arc::new(Catalog {
-            state: Mutex::new(Ok(Snapshot {
-                revision: 0,
-                ports: Arc::new(client.ports()?),
-            })),
-            changed: Condvar::new(),
-            client: Mutex::new(Some(client)),
-        });
-        Ok((
-            Self {
-                key,
-                catalog: Arc::downgrade(&catalog),
-            },
-            Subscription(catalog),
-        ))
-    }
-    fn scan(&mut self) {
-        let Some(catalog) = self.catalog.upgrade() else {
-            return;
-        };
-        let mut client = catalog.client.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(discovery) = &*client else {
-            return;
-        };
-        let result = discovery.ports();
-        let mut state = catalog.state.lock().unwrap_or_else(|p| p.into_inner());
-        match result {
-            Ok(ports) => {
-                if let Ok(snapshot) = &mut *state {
-                    snapshot.revision += 1;
-                    if *snapshot.ports != ports {
-                        snapshot.ports = Arc::new(ports);
-                    }
-                    catalog.changed.notify_all();
-                }
-            }
-            Err(error) => {
-                *state = Err(error);
-                catalog.changed.notify_all();
-                *client = None;
-            }
-        }
-    }
-}
-impl Drop for Entry {
-    fn drop(&mut self) {
-        if let Some(catalog) = self.catalog.upgrade() {
-            let mut state = catalog.state.lock().unwrap_or_else(|p| p.into_inner());
-            if state.is_ok() {
-                *state = Err(Error::Worker("device scanner stopped".into()));
-            }
-            catalog.changed.notify_all();
-        }
-    }
-}
-fn run(receiver: mpsc::Receiver<Request>) {
-    let mut entries: Vec<Entry> = Vec::new();
-    let mut interval = DEFAULT_INTERVAL;
-    let mut next = Instant::now() + interval;
-    loop {
-        entries.retain(|e| e.catalog.strong_count() != 0);
-        if Instant::now() >= next {
-            for entry in &mut entries {
-                entry.scan();
-            }
-            next = Instant::now() + interval;
-        }
-        let request = if entries.is_empty() {
-            match receiver.recv() {
-                Ok(request) => request,
-                Err(_) => return,
-            }
-        } else {
-            match receiver.recv_timeout(next.saturating_duration_since(Instant::now())) {
-                Ok(request) => request,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => return,
-            }
-        };
-        let (key, reply) = match request {
-            Request::Interval {
-                interval: value,
-                reply,
-            } => {
-                let result = Instant::now()
-                    .checked_add(value)
-                    .ok_or_else(|| Error::Invalid("scan interval is out of range".into()))
-                    .map(|deadline| {
-                        interval = value;
-                        next = deadline;
-                    });
-                let _ = reply.send(result);
-                continue;
-            }
-            Request::Subscribe { key, reply } => (key, reply),
-        };
-        let existing = entries
-            .iter()
-            .find(|e| e.key == key)
-            .and_then(|e| e.catalog.upgrade());
-        let first = entries.is_empty();
-        let result = if let Some(catalog) = existing {
-            Ok(Subscription(catalog))
-        } else {
-            Entry::new(key).map(|(entry, subscription)| {
-                entries.push(entry);
-                subscription
-            })
-        };
-        let _ = reply.send(result);
-        if first {
-            next = Instant::now() + interval;
-        }
     }
 }
