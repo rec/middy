@@ -116,10 +116,10 @@ def _covered(definition: Tuning, note: int) -> bool:
 
     source = definition.source
     if isinstance(source, FrequencyTable):
-        return source.first_note <= note < source.first_note + len(source.values)
+        return source.first_note <= note < source.first_note + len(source.frequencies)
     degree = note - definition.root_note
     if isinstance(source, RatioTable):
-        return source.repeat_ratio is not None or 0 <= degree < len(source.values)
+        return source.repeat_ratio is not None or 0 <= degree < len(source.ratios)
     if isinstance(source, IntervalPattern):
         return source.repeat or 0 <= degree <= len(source.intervals)
     return True

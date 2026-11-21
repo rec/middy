@@ -207,7 +207,7 @@ synth supports these features and is configured for that device ID.
 ```python
 import middy as md
 
-source = md.Tuning(source=md.RatioTable(values=['1', '3/2', '2']), root_note=69)
+source = md.Tuning(source=md.RatioTable(ratios=['1', '3/2', '2']), root_note=69)
 dump = md.tuning.bulk_dump(
     source,
     notes=[69, 70, 71],

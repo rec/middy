@@ -10,7 +10,6 @@ pytest.importorskip("tyro", reason="install middy[cli]")
 from middy import (
     Computed,
     FrequencyTable,
-    RatioTable,
     Tuning,
     cli,
     file_io,
@@ -122,7 +121,7 @@ def test_partial_export_preserves_missing_keys_and_never_hides_invalid_pitches(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     source = tmp_path / "partial.json"
-    source.write_text(Tuning(source=RatioTable(values=["1", "3/2"])).model_dump_json())
+    source.write_text('{"source":{"ratios":["1","3/2"]}}')
     destination = tmp_path / "partial.syx"
     args = [
         "ufor-export",
@@ -154,7 +153,9 @@ def test_partial_export_preserves_missing_keys_and_never_hides_invalid_pitches(
         sum(isinstance(v, tuning.NoChange) for v in decoded.message.table.values) == 126
     )
     source.write_text(
-        Tuning(source=FrequencyTable(values=["1/10"], first_note=69)).model_dump_json()
+        Tuning(
+            source=FrequencyTable(frequencies=["1/10"], first_note=69)
+        ).model_dump_json()
     )
     failed = tmp_path / "invalid.syx"
     args[2] = str(failed)

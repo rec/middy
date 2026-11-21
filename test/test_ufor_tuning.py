@@ -18,7 +18,7 @@ from middy import (
 
 
 def test_conversion_returns_a_native_note_tuning() -> None:
-    source = Tuning(source=RatioTable(values=["1", "3/2"]), root_note=69)
+    source = Tuning(source=RatioTable(ratios=["1", "3/2"]), root_note=69)
     assert tuning.convert(source, 70) == tuning.NoteTuning(
         note=70, pitch=tuning.Pitch(semitone=76, fraction=320)
     )
@@ -30,7 +30,7 @@ def test_conversion_returns_a_native_note_tuning() -> None:
 @pytest.mark.parametrize(
     "source",
     [
-        Tuning(source=FrequencyTable(values=["440", "660"], first_note=69)),
+        Tuning(source=FrequencyTable(frequencies=["440", "660"], first_note=69)),
         Tuning(source=IntervalPattern(intervals=["3/2"], repeat=False), root_note=69),
     ],
 )
@@ -53,30 +53,42 @@ def test_scala_and_computed_tunings_use_existing_ufor_resolution() -> None:
 
 
 def test_invalid_frequencies_and_evaluation_errors_raise() -> None:
-    source = Tuning(source=FrequencyTable(values=["1", "440", "100000"], first_note=60))
+    source = Tuning(
+        source=FrequencyTable(frequencies=["1", "440", "100000"], first_note=60)
+    )
     for n in [60, 62]:
         with pytest.raises(ValueError, match="MTS frequency range"):
             tuning.convert(source, n)
     assert isinstance(source.source, FrequencyTable)
-    source.source.values[1] = "1/0"
+    source.source.frequencies[1] = "1/0"
     with pytest.raises((ArithmeticError, ValueError)):
         tuning.convert(source, 61)
 
 
-@pytest.mark.parametrize("semitone, fraction, direction", [(0, 0, -1), (127, 16382, 1)])
+@pytest.mark.parametrize(
+    "semitone, fraction, direction, denominator",
+    [(0, 0, -1, 10**17), (127, 16382, 1, 10**14)],
+)
 def test_out_of_range_exact_pitch_cannot_round_onto_a_valid_endpoint(
-    semitone: int, fraction: int, direction: int
+    semitone: int, fraction: int, direction: int, denominator: int
 ) -> None:
     edge = Fraction(tuning.Pitch(semitone=semitone, fraction=fraction).frequency_hz)
-    outside = edge + direction * Fraction(1, 10**30)
+    scaled = edge * denominator
+    numerator = (
+        (scaled.numerator - 1) // scaled.denominator
+        if direction < 0
+        else scaled.numerator // scaled.denominator + 1
+    )
+    outside = Fraction(numerator, denominator)
+    assert (outside - edge) * direction > 0
     assert float(outside) == float(edge)
-    source = Tuning(source=FrequencyTable(values=[str(outside)], first_note=0))
+    source = Tuning(source=FrequencyTable(frequencies=[str(outside)], first_note=0))
     with pytest.raises(ValueError, match="MTS frequency range"):
         tuning.convert(source, 0)
 
 
 def test_bulk_preserves_omitted_keys_and_missing_source_mappings() -> None:
-    source = Tuning(source=FrequencyTable(values=["440"], first_note=69))
+    source = Tuning(source=FrequencyTable(frequencies=["440"], first_note=69))
     for bank in [None, 3]:
         message = tuning.bulk_dump(
             source,
@@ -121,7 +133,7 @@ def test_bulk_rejects_invalid_key_selections(
 
 
 def test_bulk_converts_the_example_and_preserves_finite_source_boundaries() -> None:
-    source = Tuning(source=RatioTable(values=["1", "3/2", "2"]), root_note=69)
+    source = Tuning(source=RatioTable(ratios=["1", "3/2", "2"]), root_note=69)
     dump = tuning.bulk_dump(
         source, notes=[68, 71, 70, 69, 72], device_id=0, name="Just three"
     )
@@ -135,12 +147,12 @@ def test_bulk_converts_the_example_and_preserves_finite_source_boundaries() -> N
 
 
 def test_bulk_rejects_invalid_frequencies_and_propagates_evaluation_errors() -> None:
-    source = Tuning(source=FrequencyTable(values=["1/10"], first_note=69))
+    source = Tuning(source=FrequencyTable(frequencies=["1/10"], first_note=69))
     with pytest.raises(ValueError, match="MTS frequency range"):
         tuning.bulk_dump(source, notes=[69], device_id=1, program=0, name="test")
     assert isinstance(source.source, FrequencyTable)
-    source.source.values[0] = "1/0"
-    with pytest.raises(ValueError, match="undefined or out of range"):
+    source.source.frequencies[0] = "1/0"
+    with pytest.raises(ValueError, match="division by zero"):
         tuning.bulk_dump(source, notes=[69], device_id=1, program=0, name="test")
 
 
@@ -189,7 +201,7 @@ def test_note_changes_accept_explicit_no_change_entries(
     bank: int | None, realtime: bool
 ) -> None:
     result = [
-        tuning.convert(Tuning(source=RatioTable(values=["1"])), 69),
+        tuning.convert(Tuning(source=RatioTable(ratios=["1"])), 69),
         tuning.NoteTuning(note=70, pitch=tuning.NoChange()),
     ]
     outgoing = tuning.note_changes(
@@ -226,11 +238,11 @@ def test_message_builders_keep_native_validation_and_require_explicit_settings()
 def test_detuning_uses_ufor_and_converted_notes_do_not_change_with_source_edits() -> (
     None
 ):
-    source = Tuning(source=RatioTable(values=["1"]), detune_cents=100)
+    source = Tuning(source=RatioTable(ratios=["1"]), detune_cents=100)
     result = [tuning.convert(source, 69)]
     assert result[0].pitch == tuning.Pitch(semitone=70, fraction=0)
     assert isinstance(source.source, RatioTable)
-    source.source.values[0] = "2"
+    source.source.ratios[0] = "2"
     assert result[0].pitch == tuning.Pitch(semitone=70, fraction=0)
     dump = tuning.bulk_dump(source, notes=[69], device_id=1, program=0, name="updated")
     assert dump.table.values[69] == tuning.Pitch(semitone=82, fraction=0)
