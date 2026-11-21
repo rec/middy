@@ -6,7 +6,7 @@ Build-only dependencies are included for completeness. middy's own MIT license
 is in LICENSE.
 
 Vendored libremidi sources are pinned to fork revision
-53a94516cc280fa63f6de12bfe279ba3c26d02b9. Their BSD 2-clause and inherited
+a3d7d168615675f1257b5f5bc480cae2e75b5510. Their BSD 2-clause and inherited
 MIT/BSD license texts are retained in third_party/libremidi/LICENSE.md.
 See third_party/libremidi/SOURCE.md for provenance and fork patches. The Rust
 transport statically links these sources. The complete upstream license text is

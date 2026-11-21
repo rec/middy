@@ -1,6 +1,6 @@
 # middy: a fast and full-featured MIDI library for Python and Rust
 
-(NB: all this text was written by a human person.)
+(NB: the original text was written by a human person.)
 
 ## WARNING: rapid change happening
 
@@ -13,10 +13,11 @@ direction of simplicity.
 `middy` is a full-featured MIDI library available in Rust and Python, for Linux, MacOS
 and Windows.
 
-Using the popular low-level Rust MIDI library
-[`midir`](https://github.com/Boddlnagg/midir) as a transport layer, it adds not just
-Python bindings, but full support for MIDI 2, 7- and 14- bit controllers, sysex, MTS
-(MIDI Tuning Standard), MPE (MIDI polyphonic expression), and Python bindings.
+Both APIs use libremidi for live MIDI. They support 7- and 14-bit controllers,
+SysEx, MTS (MIDI Tuning Standard), MPE (MIDI Polyphonic Expression), and MIDI 2
+messages in Universal MIDI Packets and MIDI Clip Files. Live UMP support depends
+on the backend. Windows currently uses WinMM for MIDI 1. See the
+[platform qualification matrix](plan/qualification.md#open-gates) for live transport coverage.
 
 On the Python side only, all parameters that accept numbers with implied units, like
 times, frequencies, rates and that sort of thing, can accept strings with units (like

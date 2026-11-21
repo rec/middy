@@ -132,15 +132,15 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
                         )
                     ) == (r.name in {"tyro", "pydantic", "reccy", "ufor"})
             assert metadata["License-Expression"] == "MIT"
-            assert any(n.endswith("/licenses/LICENSE") for n in names)
-            assert any(
-                n.endswith("/licenses/crates/middy/third_party/libremidi/LICENSE.md")
-                for n in names
+            notices = (
+                "LICENSE",
+                "crates/middy/THIRD_PARTY_NOTICES.md",
+                "crates/middy/third_party/libremidi/LICENSE.md",
+                "crates/middy/third_party/libremidi/SOURCE.md",
             )
-            assert any(
-                n.endswith("/licenses/crates/middy/THIRD_PARTY_NOTICES.md")
-                for n in names
-            )
+            for path in notices:
+                member = metadata_name.rsplit("/", 1)[0] + "/licenses/" + path
+                assert archive.read(member) == (project / path).read_bytes()
             assert (
                 archive.read("middy/midi.pyi")
                 == (project / "middy" / "midi.pyi").read_bytes()
@@ -174,6 +174,7 @@ def test_source_distribution_contains_build_typing_and_test_sources() -> None:
                 "crates/middy/third_party/libremidi/tests/unit/winmm_discovery.cpp",
                 "LICENSE",
                 "crates/middy/LICENSE",
+                "crates/middy/third_party/libremidi/SOURCE.md",
                 "crates/middy/THIRD_PARTY_NOTICES.md",
                 "middy/midi.pyi",
                 "middy/py.typed",
@@ -212,7 +213,7 @@ def test_source_distribution_contains_build_typing_and_test_sources() -> None:
                 "crates/middy/src/comparison.rs",
                 "crates/middy/src/inspection_timing.rs",
                 "crates/middy/tests/comparison.rs",
-                "crates/middy/tests/inspection_timing.rs",
+                "crates/middy/src/inspection_timing_tests.rs",
                 "middy/cli.py",
                 "middy/_cli.py",
                 "test/test_cli.py",
@@ -259,7 +260,7 @@ def test_source_distribution_contains_build_typing_and_test_sources() -> None:
                 "crates/middy/src/event_views.rs",
                 "crates/middy/tests/files.rs",
                 "crates/middy/tests/archive.rs",
-                "crates/middy/tests/fixtures/archive-v1.txt",
+                "crates/middy/tests/fixtures/archive-v2.txt",
                 "crates/middy/tests/live.rs",
                 "crates/middy/tests/file_timing.rs",
                 "crates/middy/tests/event_views.rs",
@@ -327,7 +328,7 @@ def test_source_distribution_contains_build_typing_and_test_sources() -> None:
                 "crates/middy/src/ump.rs",
                 "crates/middy/src/ump_values.rs",
                 "crates/middy/src/ump_stream.rs",
-                "crates/middy/src/ump_translation.rs",
+                "crates/middy/src/translation.rs",
                 "crates/middy/src/ump_helpers.rs",
                 "crates/middy/tests/ump.rs",
                 "crates/middy/tests/fixtures/ump.txt",
@@ -368,7 +369,7 @@ def test_source_distribution_contains_build_typing_and_test_sources() -> None:
                 "crates/middy/src/messages.rs",
                 "src/lifecycle.rs",
                 "test/native/middy_callbacks.py",
-                "test/native/middy_worker.py",
+                "crates/middy/tests/support/subprocess_worker.rs",
                 "test/native/middy_messages.py",
                 "test/test_isolation.py",
             } <= names

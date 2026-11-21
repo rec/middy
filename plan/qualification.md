@@ -107,3 +107,19 @@ Physical tests require named equipment, authorization and a recovery procedure
 for unplug/replug, reboot, driver faults and uncertain sends. Keep codec, file,
 state-machine, software-loopback and physical claims separate. This document
 authorizes no runtime test, installation, publication or hardware operation.
+
+
+## Release acceptance and withdrawal
+
+For each candidate, build a wheel from the source archive, run the installed
+wheel checks outside the checkout, and run `pytest test/release/artifacts.py`
+against the files in `dist/`. Record the commit, filenames and results.
+The platform matrix runs when a GitHub release is published. If a platform
+fails, pause distribution, identify affected filenames and environments in
+the release notes, and mark the release as affected. If those files reached
+a package index, yank the affected version there. Publish a corrected version
+after verifying the failing case and the replacement artifacts.
+
+When refreshing libremidi, reconcile each patch in the source manifest with the
+new pin, update the notices, and run its listed backend regressions on each
+available platform. Retain outstanding platform checks in the matrix above.
