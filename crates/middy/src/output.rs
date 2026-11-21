@@ -2,7 +2,7 @@
 use crate::codecs::{DecodeItem, Decoder};
 use crate::events::{Payload, Rational};
 use crate::messages::{self, AnyCommand, AnyMessage, Command, Message, PrimitiveMessage};
-use crate::messages::{Beats, Note, NoteDuration, Rest};
+use crate::messages::{Beats, Chord, Note, NoteDuration, Rest};
 use crate::playback::{Cancellation, MonotonicClock, PlaybackClock};
 use crate::transport::{self, Encoding, Packet, Port};
 use std::collections::BTreeMap;
@@ -57,6 +57,7 @@ pub enum OutputValue {
     Message(Payload),
     Packet(Packet),
     Note(Note),
+    Chord(Chord),
     Rest(Rest),
     Wait(NoteDuration),
     Record(crate::archive::Record),
@@ -560,24 +561,10 @@ impl Output {
                     return Err(invalid("archive record requires source normalization"))
                 }
                 OutputValue::Note(note) => {
-                    elapsed = elapsed.checked_add(note.duration().seconds(self.bpm)?)?;
-                    let end = nanoseconds(elapsed)?;
-                    let channel = self.channel.or(note.channel()).unwrap_or(1);
-                    let attack = messages::NoteOn::new(note.note().into())?
-                        .with_velocity(note.velocity().into())?
-                        .with_channel(channel.into())?;
-                    let release =
-                        messages::NoteOff::new(note.note().into())?.with_channel(channel.into())?;
-                    plan.push((
-                        start,
-                        Some(self.prepare_message(Payload::Message(AnyMessage::NoteOn(attack)))?),
-                        rounded,
-                    ));
-                    plan.push((
-                        end,
-                        Some(self.prepare_message(Payload::Message(AnyMessage::NoteOff(release)))?),
-                        elapsed.multiply(1_000_000_000, 1)?.denominator() != 1,
-                    ));
+                    self.prepare_notes(std::slice::from_ref(&note), &mut elapsed, &mut plan)?;
+                }
+                OutputValue::Chord(chord) => {
+                    self.prepare_notes(chord.notes(), &mut elapsed, &mut plan)?;
                 }
                 OutputValue::Rest(rest) => {
                     elapsed = elapsed.checked_add(rest.duration().seconds(self.bpm)?)?
@@ -597,6 +584,24 @@ impl Output {
         }
         plan.push((nanoseconds(elapsed)?, None, false));
         Ok(plan)
+    }
+    fn prepare_notes(
+        &self,
+        notes: &[Note],
+        elapsed: &mut Rational,
+        plan: &mut Vec<(u64, Option<Prepared>, bool)>,
+    ) -> io::Result<()> {
+        let (events, duration) = crate::sequence::schedule_notes(notes, self.bpm, self.channel)?;
+        for (offset, message) in events {
+            let at = elapsed.checked_add(offset)?;
+            plan.push((
+                nanoseconds(at)?,
+                Some(self.prepare_message(message)?),
+                at.multiply(1_000_000_000, 1)?.denominator() != 1,
+            ));
+        }
+        *elapsed = elapsed.checked_add(duration)?;
+        Ok(())
     }
     fn prepare_message(&self, message: Payload) -> io::Result<Prepared> {
         message.validate()?;
@@ -1042,6 +1047,11 @@ impl From<Note> for OutputValue {
         Self::Note(v)
     }
 }
+impl From<Chord> for OutputValue {
+    fn from(v: Chord) -> Self {
+        Self::Chord(v)
+    }
+}
 impl From<Rest> for OutputValue {
     fn from(v: Rest) -> Self {
         Self::Rest(v)
@@ -1157,6 +1167,63 @@ mod tests {
     }
     fn bytes(values: &[&[u8]]) -> Vec<Packet> {
         values.iter().map(|v| Packet::Bytes(v.to_vec())).collect()
+    }
+
+    #[test]
+    fn expressive_chord_sets_up_mpe_and_bends_only_the_selected_voice() {
+        let mut fixture = Fixture::new();
+        fixture.output = fixture.output.with_bpm(120).unwrap();
+        let chord = Chord::new([
+            Note::new(Beats::from(2), 60).unwrap(),
+            Note::new(Beats::from(2), 64)
+                .unwrap()
+                .with_start(Duration::from_millis(20))
+                .bend(Beats::from(1), 2.0)
+                .unwrap(),
+        ]);
+        fixture.output.send(chord).unwrap();
+        assert_eq!(
+            *fixture.deadlines.borrow(),
+            [
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                20_000_000,
+                520_000_000,
+                1_000_000_000,
+                1_000_000_000,
+                1_020_000_000,
+                1_020_000_000,
+                1_020_000_000,
+                1_020_000_000
+            ],
+        );
+        let packets = fixture.packets();
+        assert!(packets.contains(&Packet::Bytes(vec![0xb0, 6, 2])));
+        assert!(packets.contains(&Packet::Bytes(vec![0xb1, 6, 48])));
+        assert!(packets.contains(&Packet::Bytes(vec![0xb2, 6, 48])));
+        assert!(packets.contains(&Packet::Bytes(vec![0xb0, 6, 0])));
+        let notes_and_bends: Vec<_> = packets
+            .into_iter()
+            .filter(|packet| matches!(packet, Packet::Bytes(b) if b[0] & 0xf0 != 0xb0))
+            .collect();
+        assert_eq!(
+            notes_and_bends,
+            bytes(&[
+                b"\xe1\x00\x40",
+                b"\xe2\x00\x40",
+                b"\x91\x3c\x5a",
+                b"\x92\x40\x5a",
+                b"\xe2\x55\x42",
+                b"\x81\x3c\x00",
+                b"\xe1\x00\x40",
+                b"\x82\x40\x00",
+                b"\xe2\x00\x40",
+            ])
+        );
     }
 
     #[test]

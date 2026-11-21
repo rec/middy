@@ -236,45 +236,21 @@ ordered messages of at most 127 keys each.
 ## 10. Bend one note of an MPE chord
 
 Hold C and E for two beats, bending only E up two semitones after the first beat.
-This configures an MPE lower zone on channels 2 and 3 with a 48-semitone bend
-range. Use an MPE synth and reserve these channels; the configuration remains.
+Use an MPE synth and reserve channels 1 through 3. Playback configures a lower
+zone with a 48-semitone bend range and disables the zone after the last release.
+The member channels retain the configured bend range.
 
 ```python
 import middy as md
 
-zone = md.ZoneConfiguration(manager_channel=1, members=2)
-allocator = md.mpe.Allocator(zone=zone)
-root = allocator.allocate(note=60, velocity=90)
-moving = allocator.allocate(note=64, velocity=75)
-bpm = 120
-clock = md.Clock(identity='mpe', tick_numerator=60, tick_denominator=bpm)
-origin = md.Timestamp(ticks=0, clock=clock)
-releases = [allocator.release(voice_id=v.id, velocity=0) for v in [root, moving]]
-ending = [*releases, md.PitchBend(channel=moving.channel, value=0)]
-sequence = [
-    m.replace(stream='mpe', timestamp=md.Timestamp(ticks=b, clock=clock))
-    for b, m in [
-        (0, root.note_on),
-        (0, moving.note_on),
-        (1, md.PitchBend(channel=moving.channel, value=round(8192 * 2 / 48))),
-        *((2, m) for m in ending),
-    ]
-]
-client = md.Output()
-with client.connect(client.ports()[0]) as output:
-    output.send(zone)
-    for voice in [root, moving]:
-        output.send(
-            md.controls.pitch_bend_sensitivity(
-                channel=voice.channel, semitones=48, cents=0
-            )
-        )
-        output.send(md.PitchBend(channel=voice.channel, value=0))
-    print(output.send(sequence, origin=origin))
+md.Output(bpm=120).send(md.Chord(
+    md.Note(duration=2, note=60, velocity=90),
+    md.Note(duration=2, note=64, velocity=75).bend(at=1, semitones=2),
+))
 ```
 
-The allocator supplies separate member channels and the corresponding releases.
-The explicit beat positions here describe expression within a held chord.
+Notes start together by default. Add `start='20 ms'` to delay a note relative
+to the chord. The note's duration and bend offsets are relative to its own start.
 
 ## 11. Discover MIDI-CI devices
 

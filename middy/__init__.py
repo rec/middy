@@ -14,6 +14,7 @@ __all__: list[str] = [
     "Cancellation",
     "CapabilityError",
     "ChannelPressure",
+    "Chord",
     "Clock",
     "ClockMapping",
     "ComparisonReport",
@@ -198,6 +199,7 @@ from .inspection import ComparisonReport, Monitor, MonitorReport
 from .messages import (
     ActiveSensing,
     ChannelPressure,
+    Chord,
     Continue,
     ControlChange,
     Message,

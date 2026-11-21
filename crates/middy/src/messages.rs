@@ -15,7 +15,9 @@
 //! # Ok::<(), ValueError>(())
 //! ```
 
-pub use crate::sequence::{Beats, Note, NoteDuration, Rest};
+#[doc(hidden)]
+pub use crate::sequence::schedule_notes;
+pub use crate::sequence::{Beats, Chord, Note, NoteDuration, Rest};
 use std::error::Error;
 use std::fmt;
 

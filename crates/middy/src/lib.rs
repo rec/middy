@@ -60,7 +60,7 @@ pub use file_io::{write, Reader, Writer};
 pub use gm::{DrumKit, GmMode, Percussion, Program};
 pub use inspection::{ComparisonReport, Monitor, MonitorReport};
 pub use messages::{
-    ActiveSensing, AnyCommand, AnyMessage, Beats, ChannelPressure, Command, Continue,
+    ActiveSensing, AnyCommand, AnyMessage, Beats, ChannelPressure, Chord, Command, Continue,
     ControlChange, ControllerFamily, Message, Note, NoteOff, NoteOn, ParameterSet, ParameterStep,
     PitchBend, PolyPressure, PrimitiveMessage, ProgramChange, QuarterFrame, Rest, SongPosition,
     SongSelect, Start, Stop, SysEx, SystemReset, TimingClock, TuneRequest,

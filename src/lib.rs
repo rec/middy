@@ -200,6 +200,7 @@ fn populate_midi(module: &Bound<'_, PyModule>) -> PyResult<()> {
     native.add_function(wrap_pyfunction!(callback::check_thread, &native)?)?;
     native.add_function(wrap_pyfunction!(packets::prepare_send, &native)?)?;
     native.add_function(wrap_pyfunction!(live::prepare_output, &native)?)?;
+    native.add_function(wrap_pyfunction!(messages::schedule_notes, &native)?)?;
     native.add_function(wrap_pyfunction!(live::resolve_output_channel, &native)?)?;
     native.add_function(wrap_pyfunction!(live::live_size, &native)?)?;
     playback::register_native(&native)?;

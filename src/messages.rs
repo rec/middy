@@ -1241,21 +1241,29 @@ pub(crate) fn value_hash(value: &impl Hash) -> u64 {
 struct Note {
     duration: Py<PyAny>,
     attack: Py<NoteOn>,
+    start: Py<PyAny>,
+    bends: Vec<(Py<PyAny>, f64)>,
 }
 #[pymethods]
 impl Note {
     #[new]
-    #[pyo3(signature=(duration, note, velocity=90, channel=None))]
+    #[pyo3(signature=(duration, note, velocity=90, channel=None, *, start=None))]
     fn new(
         py: Python<'_>,
         duration: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=strict_integer)] note: i64,
         #[pyo3(from_py_with=strict_integer)] velocity: i64,
         channel: Option<&Bound<'_, PyAny>>,
+        start: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         validate_duration(duration)?;
+        let zero = PyInt::new(py, 0);
+        let start = start.unwrap_or(zero.as_any());
+        validate_duration(start)?;
         Ok(Self {
             duration: duration.clone().unbind(),
+            start: start.clone().unbind(),
+            bends: Vec::new(),
             attack: Py::new(
                 py,
                 NoteOn::new(
@@ -1273,6 +1281,29 @@ impl Note {
     #[getter]
     fn duration(&self, py: Python<'_>) -> Py<PyAny> {
         self.duration.clone_ref(py)
+    }
+    #[getter]
+    fn start(&self, py: Python<'_>) -> Py<PyAny> {
+        self.start.clone_ref(py)
+    }
+    fn bend(&self, at: &Bound<'_, PyAny>, semitones: f64) -> PyResult<Self> {
+        validate_duration(at)?;
+        if !(-48.0..=48.0).contains(&semitones) {
+            return Err(PyValueError::new_err("bend must be within ±48 semitones"));
+        }
+        let py = at.py();
+        let mut bends: Vec<_> = self
+            .bends
+            .iter()
+            .map(|(offset, value)| (offset.clone_ref(py), *value))
+            .collect();
+        bends.push((at.clone().unbind(), semitones));
+        Ok(Self {
+            duration: self.duration.clone_ref(py),
+            attack: self.attack.clone_ref(py),
+            start: self.start.clone_ref(py),
+            bends,
+        })
     }
     #[getter]
     fn note(&self, py: Python<'_>) -> i64 {
@@ -1296,6 +1327,86 @@ impl Note {
                 .map_or_else(|| "None".into(), |v| v.to_string())
         ))
     }
+}
+
+#[pyclass(frozen, module = "middy.messages")]
+struct Chord {
+    notes: Py<PyTuple>,
+}
+
+#[pymethods]
+impl Chord {
+    #[new]
+    #[pyo3(signature=(*notes))]
+    fn new(notes: &Bound<'_, PyTuple>) -> PyResult<Self> {
+        for note in notes {
+            note.cast::<Note>()?;
+        }
+        Ok(Self {
+            notes: notes.clone().unbind(),
+        })
+    }
+
+    #[getter]
+    fn notes(&self, py: Python<'_>) -> Py<PyTuple> {
+        self.notes.clone_ref(py)
+    }
+}
+
+type FractionParts = (i128, i128);
+type AuthoredPlan = (Vec<(FractionParts, Py<PyAny>)>, FractionParts);
+
+#[pyfunction]
+pub(crate) fn schedule_notes(
+    value: &Bound<'_, PyAny>,
+    beat_period: &Bound<'_, PyAny>,
+    channel: Option<u8>,
+) -> PyResult<AuthoredPlan> {
+    use middy::events::Rational;
+    let py = value.py();
+    let seconds = py.import("middy._units")?.getattr("sequence_duration")?;
+    let resolve = |value: &Py<PyAny>| -> PyResult<messages::Beats> {
+        let amount = seconds.call1((value, beat_period))?;
+        let n = amount.getattr("numerator")?.extract()?;
+        let d = amount.getattr("denominator")?.extract()?;
+        let rational =
+            Rational::new(n, d).map_err(|error| PyValueError::new_err(error.to_string()))?;
+        messages::Beats::try_from(rational).map_err(value_error)
+    };
+    let resolve_note = |note: PyRef<'_, Note>| -> PyResult<messages::Note> {
+        let mut resolved = messages::Note::new(resolve(&note.duration)?, note.note(py))
+            .and_then(|v| v.with_velocity(note.velocity(py)))
+            .map_err(value_error)?
+            .with_start(resolve(&note.start)?);
+        if let Some(channel) = note.channel(py) {
+            resolved = resolved.with_channel(channel).map_err(value_error)?;
+        }
+        for (at, semitones) in &note.bends {
+            resolved = resolved
+                .bend(resolve(at)?, *semitones)
+                .map_err(value_error)?;
+        }
+        Ok(resolved)
+    };
+    let notes = if let Ok(chord) = value.extract::<PyRef<'_, Chord>>() {
+        chord
+            .notes
+            .bind(py)
+            .iter()
+            .map(|note| resolve_note(note.extract()?))
+            .collect::<PyResult<_>>()?
+    } else {
+        vec![resolve_note(value.extract()?)?]
+    };
+    // At 60 BPM, these already-resolved beat magnitudes are seconds.
+    let (events, duration) = messages::schedule_notes(&notes, Some(60.into()), channel)
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    let parts = |v: Rational| (v.numerator(), v.denominator());
+    let events = events
+        .into_iter()
+        .map(|(at, message)| Ok((parts(at), crate::event_values::to_python(py, message)?)))
+        .collect::<PyResult<_>>()?;
+    Ok((events, parts(duration)))
 }
 
 #[pyclass(frozen, module = "middy.messages")]
@@ -1333,6 +1444,7 @@ fn validate_duration(value: &Bound<'_, PyAny>) -> PyResult<()> {
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Message>()?;
     module.add_class::<Note>()?;
+    module.add_class::<Chord>()?;
     module.add_class::<Rest>()?;
     module.add_class::<SysEx>()?;
     register_short(module)?;

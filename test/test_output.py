@@ -10,7 +10,17 @@ from time import monotonic
 
 import pytest
 
-from middy import _native, codecs, events, messages, midi, testing
+from middy import (
+    Chord,
+    Note,
+    ZoneConfiguration,
+    _native,
+    codecs,
+    events,
+    messages,
+    midi,
+    testing,
+)
 
 
 class NativeConnection:
@@ -215,6 +225,61 @@ def test_delay_only_call_waits_without_sending(transport: NativeConnection) -> N
         start = monotonic()
         out.send("2ms")
         assert monotonic() - start >= 0.002
+    assert transport.packets() == []
+
+
+def test_staggered_chord_bends_only_one_note_and_advances_to_last_release(
+    transport: NativeConnection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wire: list[tuple[int, bytes | midi.UmpPacket]] = []
+
+    def sequence(
+        send: Callable[[object], None],
+        scheduled: Iterable[tuple[int, object, bool]],
+        **options: object,
+    ) -> None:
+        for at, message, _ in scheduled:
+            if message is not None:
+                send(message)
+                wire.extend((at, p) for p in transport.packets())
+
+    monkeypatch.setattr(_native, "output_sequence", sequence)
+    with midi.Output(bpm=120) as out:
+        out.send(
+            Chord(
+                Note(duration=2, note=60),
+                Note(duration=2, note=64, velocity=75, start="20 ms").bend(
+                    at=1, semitones=2
+                ),
+            ),
+            Note(duration="0 ms", note=67),
+        )
+    setup = codecs.expand(ZoneConfiguration(manager_channel=1, members=2))
+    teardown = codecs.expand(ZoneConfiguration(manager_channel=1, members=0))
+    assert wire[: len(setup)] == [(0, codecs.encode(m)) for m in setup]
+    assert wire[-len(teardown) - 2 : -2] == [
+        (1_020_000_000, codecs.encode(m)) for m in teardown
+    ]
+    assert [
+        (t, p) for t, p in wire if isinstance(p, bytes) and p[0] & 0xF0 != 0xB0
+    ] == [
+        (0, b"\xe1\x00\x40"),
+        (0, b"\xe2\x00\x40"),
+        (0, b"\x91\x3c\x5a"),
+        (20_000_000, b"\x92\x40\x4b"),
+        (520_000_000, b"\xe2\x55\x42"),
+        (1_000_000_000, b"\x81\x3c\x00"),
+        (1_000_000_000, b"\xe1\x00\x40"),
+        (1_020_000_000, b"\x82\x40\x00"),
+        (1_020_000_000, b"\xe2\x00\x40"),
+        (1_020_000_000, b"\x90\x43\x5a"),
+        (1_020_000_000, b"\x80\x43\x00"),
+    ]
+
+
+def test_bend_outside_note_fails_before_sending(transport: NativeConnection) -> None:
+    with pytest.raises(ValueError, match="bend offset"):
+        midi.Output(bpm=120).send(Note(duration=1, note=60).bend(at=1, semitones=2))
     assert transport.packets() == []
 
 

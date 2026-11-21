@@ -271,6 +271,7 @@ class Output(ResourceModel):
     def send(
         self,
         *values: messages.Note
+        | messages.Chord
         | messages.Rest
         | messages.Message
         | bytes

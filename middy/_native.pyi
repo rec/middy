@@ -1,6 +1,7 @@
 """Private Python adapter to Rust transport and lifecycle controls."""
 
 from collections.abc import Callable, Iterable
+from fractions import Fraction
 
 from . import events, messages, midi
 
@@ -123,6 +124,11 @@ def prepare_output(
     encoding: midi.Encoding, message: object
 ) -> bytes | midi.UmpPacket | tuple[str, dict[str, int | str], int]: ...
 def resolve_output_channel(message: object, channel: int | None) -> object: ...
+def schedule_notes(
+    value: messages.Note | messages.Chord,
+    beat_period: Fraction | None,
+    channel: int | None,
+) -> tuple[list[tuple[tuple[int, int], messages.Message]], tuple[int, int]]: ...
 def live_size(item: messages.Message | events.StreamDiagnostic) -> int: ...
 def output_sequence(
     send: Callable[[object], None],

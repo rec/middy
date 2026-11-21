@@ -540,6 +540,7 @@ class Output(_Client, frozen=True):
     def send(
         self,
         *values: messages.Note
+        | messages.Chord
         | messages.Rest
         | messages.Message
         | bytes
@@ -601,6 +602,7 @@ class Output(_Client, frozen=True):
                 (
                     messages.Message,
                     messages.Note,
+                    messages.Chord,
                     messages.Rest,
                     bytes,
                     bytearray,
@@ -680,38 +682,32 @@ class Output(_Client, frozen=True):
         for v in values:
             deadline = round(elapsed * 1_000_000_000)
             rounded = (elapsed * 1_000_000_000).denominator != 1
-            if isinstance(v, (messages.Note, messages.Rest, int, float, str)):
-                duration = (
-                    v.duration if isinstance(v, (messages.Note, messages.Rest)) else v
+            if isinstance(v, (messages.Note, messages.Chord)):
+                planned, duration = _native.schedule_notes(
+                    v, self._beat_period, self.channel
                 )
+                for offset, message in planned:
+                    at_ns = (elapsed + Fraction(*offset)) * 1_000_000_000
+                    prepared = _native.prepare_output(self.encoding, message)
+                    timeline.append(
+                        (
+                            round(at_ns),
+                            message if isinstance(prepared, tuple) else prepared,
+                            at_ns.denominator != 1,
+                        )
+                    )
+                elapsed += Fraction(*duration)
+            elif isinstance(v, (messages.Rest, int, float, str)):
+                duration = v.duration if isinstance(v, messages.Rest) else v
                 elapsed += _units.sequence_duration(duration, self._beat_period)
-                end = round(elapsed * 1_000_000_000)
-                if end > 2**64 - 1:
-                    raise ValueError("delay exceeds scheduler range")
-                if isinstance(v, messages.Note):
-                    channel = self.channel or v.channel or 1
-                    attack = messages.NoteOn(v.note, v.velocity, channel)
-                    release = messages.NoteOff(v.note, channel=channel)
-                    timeline.append(
-                        (
-                            deadline,
-                            _native.prepare_output(self.encoding, attack),
-                            rounded,
-                        )
-                    )
-                    timeline.append(
-                        (
-                            end,
-                            _native.prepare_output(self.encoding, release),
-                            (elapsed * 1_000_000_000).denominator != 1,
-                        )
-                    )
             else:
                 v = _native.resolve_output_channel(v, self.channel)
                 prepared = _native.prepare_output(self.encoding, v)
                 timeline.append(
                     (deadline, v if isinstance(prepared, tuple) else prepared, rounded)
                 )
+            if round(elapsed * 1_000_000_000) > 2**64 - 1:
+                raise ValueError("delay exceeds scheduler range")
         timeline.append((round(elapsed * 1_000_000_000), None, False))
         return timeline, elapsed
 

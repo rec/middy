@@ -364,6 +364,25 @@ best-effort cleanup; explicit `close()` returns cleanup errors. Use channels own
 by this connection: cleanup can affect another writer sharing a channel, and a
 failed transport can prevent cleanup.
 
+### Bend one note of an MPE chord
+
+Hold C and E for two beats, bending only E up two semitones after the first beat.
+Use an MPE synth and reserve channels 1 through 3. Playback configures a lower
+zone with a 48-semitone bend range and disables it after the last release.
+The member channels retain the configured bend range.
+
+```rust
+use middy::{Beats, Chord, Note, Output};
+
+Output::new().with_bpm(120)?.send(Chord::new([
+    Note::new(Beats::from(2), 60)?,
+    Note::new(Beats::from(2), 64)?.with_velocity(75)?.bend(Beats::from(1), 2.0)?,
+]))?;
+```
+
+Use `.with_start(Duration::from_millis(20))` to delay a note relative to the
+chord. Duration and bend offsets are relative to that note's start.
+
 ## 9. Preserve provenance while editing a message
 
 ```rust
