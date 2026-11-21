@@ -736,6 +736,40 @@ fn failed_input_disposal_retains_callback_context_and_suppresses_delivery() {
 }
 
 #[test]
+#[ignore = "requires a fresh process with all 32 native client slots available"]
+fn repeated_failed_disposals_each_retain_one_endpoint_and_client_slot() {
+    enable();
+    let observer = Output::new(OutputOptions::default()).unwrap();
+    let mut retained = Vec::new();
+    for i in 0..3 {
+        let name = format!("retained-after-disposal-{i}");
+        let input = Input::new(InputOptions::default())
+            .unwrap()
+            .create_virtual(&name, |_| {})
+            .unwrap();
+        let port = observer
+            .ports()
+            .unwrap()
+            .into_iter()
+            .find(|p| p.name() == name)
+            .unwrap();
+        let endpoint = u32::try_from(port.backend_id()).unwrap();
+        fail_disposal(endpoint);
+        assert!(input.close().is_err());
+        retained.push(endpoint);
+    }
+    assert!(retained.into_iter().all(endpoint_exists));
+    let remaining: Vec<_> = (0..28)
+        .map(|_| Output::new(OutputOptions::default()).unwrap())
+        .collect();
+    assert!(matches!(
+        Output::new(OutputOptions::default()),
+        Err(Error::Resource(_))
+    ));
+    drop(remaining);
+}
+
+#[test]
 fn ump_send_reports_an_accepted_prefix_and_does_not_retry_after_failure() {
     enable();
     let options = InputOptions {

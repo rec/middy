@@ -75,6 +75,15 @@ Parent peak RSS is a lifetime high-water mark, not incremental memory or an
 isolated-worker total. Measure the whole process tree with suitable host tools
 and report unavailable measurements and sampling blind spots.
 
+### Failed disposal on simulated CoreMIDI endpoints
+
+Run the capacity regression alone on macOS. It uses the linked CoreMIDI fixture
+and deliberately retains three failed connections until the test process exits.
+
+```sh
+cargo test --locked -p middy --test coremidi_boundary repeated_failed_disposals_each_retain_one_endpoint_and_client_slot -- --exact --ignored
+```
+
 ## Separately authorized native checks
 
 Fixtures must select unique test-owned endpoints, never a pre-existing instrument.
