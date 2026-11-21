@@ -395,12 +395,14 @@ impl Input {
                                 delivery: Arc::clone(&delivery),
                             }))
                         })?;
+                        let mut retirement = Ok(());
                         for source in removed {
                             let diagnostics = source.connection.diagnostics();
-                            source.close(true)?;
+                            retirement = retirement.and(source.close(true));
                             retired_loss =
                                 retired_loss.saturating_add(diagnostics.dropped_packets());
                         }
+                        retirement?;
                         let mut count = retired_loss;
                         for (_, source) in &topology.sources {
                             source.connection.check_health()?;

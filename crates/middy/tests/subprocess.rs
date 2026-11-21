@@ -522,6 +522,51 @@ fn all_port_recording_marks_pending_fragments_incomplete_without_completed_messa
 }
 
 #[test]
+fn simultaneous_removal_finishes_pending_source_after_first_close_fails() {
+    use middy::events::{InputItem as Item, StreamDiagnosticKind as DiagnosticKind};
+    use transport::all::AllItem;
+    let _serial = SERIAL.lock().unwrap();
+    let path = fixture().with_extension("retire");
+    write_ports(&path, "First\nSecond\n");
+    let mut worker = options("retire_fault");
+    worker.args.push(path.clone().into_os_string());
+    let client = transport::Input::new_subprocess(Default::default(), worker.clone()).unwrap();
+    let (send, receive) = std::sync::mpsc::channel();
+    let follower = client
+        .connect_all(
+            "inputs".into(),
+            1024,
+            false,
+            Some(worker),
+            None,
+            move |item| send.send(item).unwrap(),
+        )
+        .unwrap();
+    let next = || receive.recv_timeout(Duration::from_secs(3)).unwrap();
+    for _ in 0..2 {
+        assert!(matches!(next(), AllItem::Decoded(Item::Message(_))));
+    }
+    write_ports(&path, "");
+    let diagnostics = follower.diagnostics();
+    let mut disconnects = 0;
+    let mut truncated = false;
+    while disconnects < 2 {
+        if let AllItem::Decoded(Item::Diagnostic(d)) = next() {
+            disconnects += usize::from(d.kind == DiagnosticKind::ClockChange);
+            truncated |= d.kind == DiagnosticKind::Truncated;
+        }
+    }
+    assert!(truncated);
+    assert!(follower
+        .close()
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("first disposal failed"));
+    assert_eq!(diagnostics.dropped_packets(), 7);
+}
+
+#[test]
 fn default_input_follows_hotplug_and_preserves_port_descriptions_in_recordings() {
     use middy::{archive, events::InputItem, messages::Message};
     let _serial = SERIAL.lock().unwrap();

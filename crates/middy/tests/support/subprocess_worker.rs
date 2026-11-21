@@ -126,7 +126,7 @@ fn main() {
             }
             "ports" => {
                 snapshot += 1;
-                if mode == "hotplug" || mode == "broadcast" {
+                if matches!(mode.as_str(), "hotplug" | "broadcast" | "retire_fault") {
                     let path = std::env::args()
                         .nth(2)
                         .or_else(|| std::env::var("MIDDY_TEST_PORTS").ok())
@@ -172,7 +172,7 @@ fn main() {
                 );
             }
             "open" => {
-                if mode == "broadcast" {
+                if mode == "broadcast" || mode == "retire_fault" {
                     opened_index = n(&args[0]);
                     opened_port = port_names[opened_index as usize].clone();
                 }
@@ -208,9 +208,12 @@ fn main() {
                         | "twice"
                         | "burst"
                         | "hotplug"
+                        | "retire_fault"
                         | "fragment"
                 ) {
-                    let data = if mode == "fragment" {
+                    let data = if mode == "retire_fault" && opened_index == 1 {
+                        Value::Bytes(vec![0xf0, 0x7d, 1, 0xf8])
+                    } else if mode == "fragment" {
                         Value::Bytes(vec![0xf0, 0x7d, 1])
                     } else if ump {
                         Value::Words(vec![0x40903c00, 0xc0000000])
@@ -404,6 +407,10 @@ fn main() {
                 ok("ok", Value::Null, dropped);
             }
             "close" | "shutdown" => {
+                if mode == "retire_fault" && opened_port == "First" && operation == "close" {
+                    error("native", "first disposal failed", true, 7);
+                    return;
+                }
                 if mode == "broadcast" && !opened_port.is_empty() {
                     output_log(&opened_port, opened_index, "close");
                 }
