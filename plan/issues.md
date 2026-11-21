@@ -1,60 +1,33 @@
-# Open implementation and qualification issues
+# Open issues and risks
 
-Additional work beyond the prompt
+Source review of revision `50049c0`, 2026-11-21. Findings below distinguish behavior visible in the implementation from failure scenarios that still need a regression or platform test. Priority reflects the consequence to a caller. No hardware, load or fault-injection tests were run for this review.
 
-None.
+## Discovery and shutdown
 
-This list retains unfinished work and unqualified failure cases. Implemented
-API behavior and completed remediation histories are not backlog items.
-See [qualification](qualification.md) and
-[libremidi provenance](../crates/middy/third_party/libremidi/SOURCE.md).
+1. **High: one blocked enumeration can stall unrelated clients.** The process-wide [scanner](../crates/middy/src/transport/scanner.rs) calls each catalog's `ports()` serially in `run`. A stalled in-process driver prevents later catalogs from refreshing. New subscriptions and scan-interval changes also wait for a reply from that thread with no deadline. An isolated client can therefore wait behind another client's in-process driver. Test with two catalogs and a deliberately blocked enumerator. Require the healthy catalog and its control requests to progress independently before claiming isolation here.
 
-## Native backend coverage
+2. **High: disconnect cleanup can lose evidence precisely when a driver fails.** In the [input follower](../crates/middy/src/transport/all.rs), `Topology::update` removes all missing sources into a vector. The retirement loop uses `source.close(true)?` before adding that source's drop count. If one close fails, later removed sources drop outside the explicit finish/disconnect path, and the failing source's loss count is omitted from the final total. Retire every removed source, accumulate diagnostics even on error, then return the failure. Cover two simultaneous removals with the first disposal failing and the second decoder holding an unfinished message.
 
-- Windows native qualification remains open. Compile/run WinMM teardown, output
-  and ANSI/Unicode discovery regressions, then test agreed loopback routes and
-  installed wheels.
-- Windows MIDI Services SDK/tooling integration is unfinished; the backend
-  remains disabled in the native build. Native UMP qualification is separate
-  from WinMM MIDI 1 checks.
-- Linux ALSA sequencer/raw and available UMP backends need native, installed-wheel
-  and runtime evidence. Mac virtual loopbacks do not qualify them.
-- Other macOS versions/architectures and physical MIDI 1/UMP interoperability
-  require separate evidence.
+3. **High consequence, backend-dependent: native callback retirement is a memory-safety boundary.** [Native teardown and borrow_receiver](../crates/middy/src/transport/native.rs) rely on native unregistration keeping the original strong reference alive until a callback can acquire its own. A late callback after a falsely successful teardown would access freed state. A reported teardown failure takes the opposite path and can retain the owner thread and its resources. The checked paths, backend exceptions and process-lifetime CoreMIDI keeper are documented in [vendor provenance](../crates/middy/third_party/libremidi/SOURCE.md). No use-after-free was established here. Exercise callback entry concurrently with successful and failed close on each backend, and count surviving threads/handles after repeated failures. Qualify embedded-interpreter finalization and reinitialization separately.
 
-Checked C API teardown covers the patched input paths and CoreMIDI output
-disposal. Direct C++ destruction, client-level CoreMIDI disposal errors and other
-output backends remain outside that guarantee. The extent of OS resources left
-after ignored disposal errors has not been measured.
+4. **Medium: a transient discovery failure can become sticky.** In [Entry::scan and run](../crates/middy/src/transport/scanner.rs), an enumeration error replaces the snapshot with an error and clears the client. A new subscription to the same key can reuse that failed catalog as long as another subscription holds it. Separately, the scanner singleton caches even an initial thread-spawn error for the process lifetime. Test reopening while the first subscriber still exists after a one-shot fault. Preserve the original failure for affected clients while allowing an explicit new open to recover.
 
-## Failure and resource qualification
+5. **Medium: duplicate port identity depends on enumeration order.** [port_keys](../crates/middy/src/transport/mod.rs) distinguishes equal names and backend IDs by occurrence. The [follower](../crates/middy/src/transport/all.rs) enumerates again on a new client and chooses the nth match. If indistinguishable endpoints reorder between those calls, the connection can attach to a different physical source. UTF-8 replacement can also make distinct raw names equal. A discovery snapshot has a native handle, but occurrence does not convey that handle across snapshots. Simulate reorder and unplug/replug with duplicate keys. Prefer a stable backend identity where available and make ambiguity observable elsewhere.
 
-Physical unplug/replug, instrument reboot, driver/service crashes, unresponsive
-hardware and resource exhaustion remain unqualified across platforms.
-Agree named equipment, traffic and recovery procedures before testing.
+## Resource costs and API behavior
 
-Measure parent/child processes, idle/peak memory, CPU, threads, handles and
-scheduling tails for the intended deployment. Native/client/queue limits do not
-provide a machine-wide budget. Parameter caches and retained recordings can grow
-with the workload. Normal and overload acceptance need separate evidence.
+6. **Medium: idle polling repeatedly performs work proportional to the square of the port count.** Every successful [scan](../crates/middy/src/transport/scanner.rs) increments the revision and wakes followers, even for identical ports. Building occurrence keys scans the previous keys for each port. Each follower then scans active and visible vectors for membership. New matches each incur another client enumeration. Measure stable and hot-plug catalogs with many virtual ports and several followers. Count enumerations and wakeups as well as CPU. Separate periodic health checks from topology changes before optimizing membership lookups.
 
-Slow callbacks, error hooks and in-process native calls can block close and
-interpreter shutdown. Isolation supplies native-operation deadlines but cannot
-cancel parent application code, a blocked filesystem or the OS MIDI service.
-Reinitializing an embedded main interpreter after finalization remains
-unqualified because the cleanup registry is process-wide.
+7. **Medium: a slow consumer can delay unrelated ports and shutdown.** The [all-input delivery loop](../crates/middy/src/transport/all.rs) serializes delivery across sources under one mutex and can hold a source's decoder lock during delivery. Close joins the follower and drains deliveries. A handler that blocks can extend shutdown indefinitely. Subprocess deadlines cover native operations only. Test with a gated handler and a second active source, including close during delivery. Document which callbacks must return promptly. Measure peak memory and scheduling delay for slow consumers, long in-memory recordings and growing parameter caches. Per-queue limits alone do not bound total process memory.
 
-## Deferred interoperability
+8. **Medium: a displayed name reused as a selector can broaden capture.** [port_matches](../crates/middy/src/output.rs) accepts either a literal substring or a shell pattern. A discovered name such as `Keys[1]` also matches `Keys1`. Input follows all matches, including future devices, while output requires a unique match. Document discovery-snapshot connection for selecting one observed device in both languages. Test this literal-name collision explicitly. The privacy consequence matters when recording a shared studio or a newly connected performer's input: examples for capturing a single instrument should clearly identify the intended source.
 
-MIDI-CI Profiles, Property Exchange and Process Inquiry engines remain deferred.
-Native Linux/Windows UMP and physical MIDI-CI interoperability need qualification
-independently of codecs and simulated exchanges. MIDI Clip profile negotiation
-and additional manufacturer dump scopes also remain open. See
-[feature proposals](features.md) and [SysEx coverage](../doc/sysex-dumps.md).
+9. **Maintenance: Python lifecycle ownership is hard to trace.** At this revision [middy/_clients.py](../middy/_clients.py) spans 1,542 lines across public Input/Output, transport adapters, connection state and recording helpers. Answering who owns recording finalization requires following both Input and _InputState. The similarly named Rust [input.rs](../crates/middy/src/input.rs) and [input_api.rs](../crates/middy/src/input_api.rs) further complicate parity reviews. On the next lifecycle change, document the owner and close/error ordering beside the state, and exercise the same failure in both APIs. Split by ownership only where that removes a real dependency or duplicate transition.
 
-## Upstream review reminder
+## Release, interoperability and stewardship
 
-At project completion, remind Tom to send the libremidi fork commits upstream
-for review, including regressions and validation limitations. The commits are
-recorded in [source provenance](../crates/middy/third_party/libremidi/SOURCE.md).
-Do not submit patches or contact maintainers automatically.
+10. **Release claims exceed the available evidence.** The [README](../README.md) identifies midir as the transport and claims full MIDI 2 support. The [build](../crates/middy/native/CMakeLists.txt) links libremidi and disables Windows MIDI Services. Buyers and integrators could select an unsupported live route based on the claim. Correct the backend name and distinguish codec/file support from verified live transport by OS, backend and protocol. The [CI matrix](../.github/workflows/ci.yml) starts on publication, so it can first expose a broken platform build after release. Define installed-artifact acceptance before publication or a documented withdrawal procedure.
+
+11. **Platform and instrument recovery still need qualification.** Track Windows WinMM discovery and teardown, Linux ALSA sequencer/raw/UMP, additional macOS configurations, physical MIDI 1/UMP, unplug/replug, reboot, service failure and resource exhaustion against the [qualification matrix](qualification.md) and [Linux procedure](linux-qualification.md). Use authorized equipment and distinguish simulated results from driver and physical-device results. MIDI-CI Profiles, Property Exchange, Process Inquiry, MIDI Clip profile negotiation and additional manufacturer dumps remain separate interoperability work. An opaque dump ending in silence can still be incomplete; preserve the distinction between an unverified capture and a verified backup in user-facing workflows. See [SysEx coverage](../doc/sysex-dumps.md).
+
+12. **Vendoring creates an ongoing distribution and maintenance obligation.** The [source manifest](../crates/middy/third_party/libremidi/SOURCE.md) records a pinned fork, local changes, separate notices and backend-specific regression coverage. Check the actual wheel and source archive for the applicable notices and source provenance at release. Track local fixes through upstream updates so a vendor refresh cannot silently undo them. This is a release verification task; no license violation was established. At project completion, remind Tom to send the fork commits and their regression evidence upstream for review.
