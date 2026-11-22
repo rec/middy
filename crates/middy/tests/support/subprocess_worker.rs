@@ -186,7 +186,7 @@ fn main() {
                     opened_index = n(&args[0]);
                     opened_port = port_names[opened_index as usize].clone();
                 }
-                if mode == "failed_open" {
+                if mode == "failed_open" || opened_port == "OpenFail" {
                     error("native", "device vanished during connect", true, 0);
                     return;
                 }

@@ -398,6 +398,38 @@ fn broadcast_failure_reports_destinations_and_partial_command_progress() {
             .contains(&if compound { "b:b00100" } else { "b:803c00" }.to_owned()));
     }
 }
+
+#[test]
+fn selected_output_survives_no_matches_and_failed_attachment() {
+    let _serial = SERIAL.lock().unwrap();
+    let (topology, log, worker) = output_fixture("Other\n");
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port(["Synth *", "OpenFail"])
+        .unwrap();
+    let clock = middy::TimingClock::new().unwrap();
+    assert!(matches!(
+        output.send(clock.clone()).unwrap_err().cause,
+        middy::events::PlaybackCause::Send(midi::Error::Connect(transport::Error::Invalid(_)))
+    ));
+    change_outputs(&topology, &log, "Synth A\nOpenFail\n");
+    let partial = output.send(clock.clone()).unwrap_err();
+    let middy::events::PlaybackCause::Send(midi::Error::BroadcastSend(progress)) = partial.cause
+    else {
+        panic!("expected an attachment error with broadcast progress");
+    };
+    assert_eq!(progress.failed_port.name, "OpenFail");
+    assert_eq!(progress.completed_ports[0].name, "Synth A");
+
+    change_outputs(&topology, &log, "Synth A\nSynth B\n");
+    assert_eq!(output.send(clock).unwrap().sent_events, 1);
+    output.close().unwrap();
+    assert_eq!(sent_to(&log, "Synth A"), ["b:f8", "b:f8"]);
+    assert_eq!(sent_to(&log, "Synth B"), ["b:f8"]);
+}
 #[test]
 fn a_second_indistinguishable_endpoint_stops_following_before_broadcast() {
     let _serial = SERIAL.lock().unwrap();

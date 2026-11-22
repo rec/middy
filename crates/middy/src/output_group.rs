@@ -46,6 +46,8 @@ pub struct OutputGroup {
     reconciled_ports: Option<Arc<Vec<transport::PortKey>>>,
     backend: transport::Backend,
     destinations: Vec<Destination>,
+    unavailable: Option<(PortInfo, Arc<midi::Error>)>,
+    selected_count: usize,
     failure: Option<Arc<midi::Error>>,
 }
 impl OutputGroup {
@@ -72,6 +74,8 @@ impl OutputGroup {
             reconciled_ports: None,
             backend,
             destinations: Vec::new(),
+            unavailable: None,
+            selected_count: 0,
             failure: None,
         };
         group.refresh()?;
@@ -103,6 +107,8 @@ impl OutputGroup {
             }
         }
         let total_ports = visible.len();
+        self.unavailable = None;
+        self.selected_count = total_ports;
         let connected: std::collections::HashSet<_> = self
             .destinations
             .iter()
@@ -140,14 +146,7 @@ impl OutputGroup {
                 }),
                 Ok(None) => (),
                 Err(error) => {
-                    return Err(midi::Error::BroadcastSend(Box::new(
-                        midi::BroadcastSendError {
-                            completed_ports: Vec::new(),
-                            failed_port: info,
-                            total_ports,
-                            cause: Box::new(error),
-                        },
-                    )))
+                    self.unavailable.get_or_insert((info, Arc::new(error)));
                 }
             }
         }
@@ -162,35 +161,51 @@ impl OutputGroup {
         if let Some(error) = &self.failure {
             return Err(midi::Error::Shared(Arc::clone(error)));
         }
-        let result = (|| {
-            self.refresh()?;
-            if self.destinations.is_empty() {
-                return Err(midi::Error::Connect(transport::Error::Invalid(
-                    "no matching MIDI outputs".into(),
-                )));
+        if let Err(error) = self.refresh() {
+            return Err(self.fail(error));
+        }
+        for i in 0..self.destinations.len() {
+            if let Err(cause) = send(&mut self.destinations[i]) {
+                let error = self.broadcast_error(i, &self.destinations[i].port, cause);
+                return Err(self.fail(error));
             }
-            for i in 0..self.destinations.len() {
-                if let Err(cause) = send(&mut self.destinations[i]) {
-                    return Err(midi::Error::BroadcastSend(Box::new(
-                        midi::BroadcastSendError {
-                            completed_ports: self.destinations[..i]
-                                .iter()
-                                .map(|p| p.port.clone())
-                                .collect(),
-                            failed_port: self.destinations[i].port.clone(),
-                            total_ports: self.destinations.len(),
-                            cause: Box::new(cause),
-                        },
-                    )));
-                }
-            }
-            Ok(())
-        })();
-        result.map_err(|error| {
-            let error = Arc::new(error);
-            self.failure = Some(Arc::clone(&error));
-            midi::Error::Shared(error)
-        })
+        }
+        if let Some((port, error)) = &self.unavailable {
+            return Err(self.broadcast_error(
+                self.destinations.len(),
+                port,
+                midi::Error::Shared(Arc::clone(error)),
+            ));
+        }
+        if self.destinations.is_empty() {
+            return Err(midi::Error::Connect(transport::Error::Invalid(
+                "no matching MIDI outputs".into(),
+            )));
+        }
+        Ok(())
+    }
+
+    fn fail(&mut self, error: midi::Error) -> midi::Error {
+        let error = Arc::new(error);
+        self.failure = Some(Arc::clone(&error));
+        midi::Error::Shared(error)
+    }
+
+    fn broadcast_error(
+        &self,
+        completed: usize,
+        port: &PortInfo,
+        cause: midi::Error,
+    ) -> midi::Error {
+        midi::Error::BroadcastSend(Box::new(midi::BroadcastSendError {
+            completed_ports: self.destinations[..completed]
+                .iter()
+                .map(|p| p.port.clone())
+                .collect(),
+            failed_port: port.clone(),
+            total_ports: self.selected_count,
+            cause: Box::new(cause),
+        }))
     }
     pub fn send(&mut self, packet: &transport::Packet) -> midi::Result<()> {
         transport::validate_packet(self.encoding, packet).map_err(midi::Error::Send)?;

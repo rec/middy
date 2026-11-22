@@ -137,7 +137,8 @@ impl Output {
     ) -> PyResult<Py<OutputConnection>> {
         let subprocess = slf.get().subprocess.clone();
         OutputConnection::open(py, slf, move |native| {
-            middy::midi::OutputGroup::new(native, patterns, subprocess).map(Sender::Group)
+            middy::midi::OutputGroup::new(native, patterns, subprocess)
+                .map(|group| Sender::Group(Box::new(group)))
         })
     }
     fn create_virtual(
@@ -162,9 +163,16 @@ pub struct OutputConnection {
 }
 enum Sender {
     Single(transport::OutputConnection),
-    Group(middy::midi::OutputGroup),
+    Group(Box<middy::midi::OutputGroup>),
 }
 impl Sender {
+    fn send_failure_is_terminal(&self) -> bool {
+        match self {
+            Self::Single(_) => true,
+            Self::Group(group) => group.failure().is_some(),
+        }
+    }
+
     fn send(&mut self, packet: &transport::Packet) -> middy::midi::Result<()> {
         match self {
             Self::Single(c) => c.send(packet).map_err(middy::midi::Error::Send),
@@ -223,26 +231,7 @@ impl OutputConnection {
                     .map_err(|e| PyValueError::new_err(e.to_string()))?;
             }
         }
-        let mut failure = None;
-        let result =
-            self.resource
-                .native
-                .send(&self.resource.client, py, &command, |native, command| {
-                    native.send_command(command).map_err(|error| {
-                        failure = Some(error);
-                        crate::errors::SendError::new_err("compound MIDI send failed")
-                    })
-                });
-        // Construct the Python progress exception after releasing the connection
-        // lock. Importing/calling a Python exception class can execute user code.
-        match failure {
-            Some(error) => {
-                let error = Arc::new(error);
-                *self.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&error));
-                Err(midi_error(&error))
-            }
-            None => result,
-        }
+        self.send_value(py, &command, Sender::send_command)
     }
 
     fn send(&self, py: Python<'_>, packet: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -250,24 +239,7 @@ impl OutputConnection {
         let packet = extract_packet(packet)?;
         transport::validate_packet(self.encoding.native(), &packet)
             .map_err(|e| transport_error(e, "send"))?;
-        let mut failure = None;
-        let result =
-            self.resource
-                .native
-                .send(&self.resource.client, py, &packet, |native, packet| {
-                    native.send(packet).map_err(|error| {
-                        failure = Some(error);
-                        crate::errors::SendError::new_err("MIDI send failed")
-                    })
-                });
-        match failure {
-            Some(error) => {
-                let error = Arc::new(error);
-                *self.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(Arc::clone(&error));
-                Err(midi_error(&error))
-            }
-            None => result,
-        }
+        self.send_value(py, &packet, Sender::send)
     }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         check_blocking_thread()?;
@@ -301,6 +273,40 @@ impl OutputConnection {
     }
 }
 impl OutputConnection {
+    fn send_value<P: Sync>(
+        &self,
+        py: Python<'_>,
+        value: &P,
+        send: impl FnOnce(&mut Sender, &P) -> middy::midi::Result<()> + Send,
+    ) -> PyResult<()> {
+        let mut failure = None;
+        let result =
+            self.resource
+                .native
+                .send(&self.resource.client, py, value, |native, value| {
+                    if let Err(error) = send(native, value) {
+                        let terminal = native.send_failure_is_terminal();
+                        failure = Some((error, terminal));
+                        if terminal {
+                            return Err(crate::errors::SendError::new_err("MIDI send failed"));
+                        }
+                    }
+                    Ok(())
+                });
+        // Build Python progress exceptions after releasing the connection lock.
+        match failure {
+            Some((error, terminal)) => {
+                let error = Arc::new(error);
+                if terminal {
+                    *self.failure.lock().unwrap_or_else(|p| p.into_inner()) =
+                        Some(Arc::clone(&error));
+                }
+                Err(midi_error(&error))
+            }
+            None => result,
+        }
+    }
+
     fn open(
         py: Python<'_>,
         client: Py<Output>,

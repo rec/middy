@@ -39,20 +39,6 @@ that application's pitch response.
 
 ## Reliability and data integrity
 
-### P2. Output followers treat a recoverable empty match as terminal
-
-When the matching group has no destinations, or refresh raises while opening
-one of several destinations, `broadcast()` stores the error permanently.
-A first send with no device, followed by hot-plug and a second send on the
-same output, therefore keeps returning the original failure. A new endpoint
-can also prevent a healthy existing destination from receiving traffic.
-Decide separately how to report a send attempted with no destinations, a
-retryable topology change, and an uncertain partial delivery. The latter
-requires explicit handling to avoid transmitting a note or command twice.
-([Refresh](../crates/middy/src/output_group.rs#L83),
-[sticky failure](../crates/middy/src/output_group.rs#L158),
-[public hot-plug contract](../doc/examples.md#L64))
-
 ### P2. Large packets can exceed memory budgets during untimed preflight
 
 Both APIs now cap untimed source items and generated events, and observe
@@ -79,16 +65,12 @@ budget and decide how to expose capacity or rotate long recordings.
 
 ## API, diagnostics, and maintenance
 
-- **P3. Public names and documentation hide important behavior.**
-  `set_scan_interval` is process-wide, but there is one polling worker per
-  backend, direction, and subprocess configuration. The example says there
-  is one shared scanner. The MPE reference describes explicit setup only
+- **P3. The note representation and MPE reference omit expressive behavior.**
+  The MPE reference describes explicit setup only
   and says bend ranges are never configured. Python `repr(Note)` omits
   both start offsets and bends, so plain and expressive notes can look
   identical in logs. Update the contracts and make the authored timing and
-  expression inspectable. ([Scanner key](../crates/middy/src/transport/scanner.rs#L57),
-  [scanner example](../doc/examples.md#L36),
-  [MPE reference](../README.ai.md#L631),
+  expression inspectable. ([MPE reference](../README.ai.md#L631),
   [note representation](../src/messages.rs#L1320))
 - **P3. Playback and port policy have overlapping owners.** The Rust output
   module combines source normalization, scheduling, transport encoding,

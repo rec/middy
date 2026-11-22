@@ -1081,8 +1081,33 @@ def test_output_selection_rejects_duplicates_and_rejects_sending_to_no_ports(
     empty = midi.Output(port=[], run_in_subprocess=True)
     with pytest.raises(ValueError, match="no matching"):
         empty.send(messages.TimingClock())
-    with pytest.raises(midi.StateError):
-        empty.close()
+    empty.close()
+
+
+def test_output_recovers_from_no_matches_and_reports_partial_attachment(
+    output_topology: tuple[Path, Path],
+) -> None:
+    topology, log = output_topology
+    write_ports(topology, "Other\n")
+    with midi.Output(port=["Synth *", "OpenFail"], run_in_subprocess=True) as output:
+        with pytest.raises(ValueError, match="no matching"):
+            output.send(messages.TimingClock())
+        assert output.worker_failure is None
+
+        change_outputs(topology, log, "Synth A\nOpenFail\n")
+        with pytest.raises(midi.BroadcastSendError) as partial:
+            output.send(messages.TimingClock())
+        assert [p.name for p in partial.value.completed_ports] == ["Synth A"]
+        assert partial.value.failed_port.name == "OpenFail"
+        assert output.worker_failure is None
+
+        change_outputs(topology, log, "Synth A\nSynth B\n")
+        assert output.send(messages.TimingClock()).sent_events == 1
+    assert output_packets(log) == [
+        ("Synth A", "b:f8"),
+        ("Synth A", "b:f8"),
+        ("Synth B", "b:f8"),
+    ]
 
 
 @pytest.mark.parametrize("raw", [False, True])

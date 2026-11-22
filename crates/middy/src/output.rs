@@ -560,12 +560,12 @@ impl Output {
                 let patterns = patterns.clone();
                 self.client()?;
                 let client = self.client.take().expect("initialized output client");
-                self.connection = Some(Connection::Group(OutputGroup::new(
+                self.connection = Some(Connection::Group(Box::new(OutputGroup::new(
                     client,
                     patterns,
                     self.run_in_subprocess
                         .then(|| self.subprocess_options.clone()),
-                )?));
+                )?)));
                 return Ok(());
             }
             let ports = self.ports()?;
@@ -807,7 +807,7 @@ fn replay_message(record: io::Result<crate::archive::Record>) -> Option<io::Resu
 }
 enum Connection {
     Native(transport::OutputConnection),
-    Group(OutputGroup),
+    Group(Box<OutputGroup>),
     #[cfg(test)]
     Test(std::rc::Rc<std::cell::RefCell<crate::testing::Output>>),
 }

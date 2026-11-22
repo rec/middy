@@ -84,13 +84,16 @@ notes, rests, messages and delays share one sequence.
 
 `Output::new().with_port("FLOW 8")?` sends to all matching outputs; shell patterns
 support `*`, `?`, `[abc]`, `[a-z]` and `[!abc]`, just as in Python. A collection
-selects the union of matches, opening each port once. Inputs and outputs share one
-device scanner with a default interval of 100 ms. `middy::set_scan_interval(Duration)`
+selects the union of matches, opening each port once. Clients with the same
+backend, direction, and subprocess settings share a scanner with a default
+interval of 100 ms. `middy::set_scan_interval(Duration)`
 changes the interval for all existing and future clients; it must be positive.
 Sends use its cached device list, including
 newly connected devices, without replaying earlier messages.
 Omitting the selector keeps the first output. Empty patterns are rejected;
-sending with no matching ports fails. For example:
+sending with no matching ports fails and can be retried after a device appears.
+If a match fails to open, connected devices receive the event and the error
+reports which accepted it.
 
 ```rust
 use middy::{Note, Output};

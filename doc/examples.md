@@ -35,7 +35,8 @@ for message in md.Input():
 
 `Input()` listens to all inputs exposed by the selected backend and encoding,
 including devices connected after opening. It can open with no devices present;
-inputs and outputs share one device scanner with a default interval of 100 ms.
+clients share a device scanner with others using the same backend, direction,
+and subprocess settings. The default scan interval is 100 ms.
 `md.set_scan_interval('250 ms')` changes the interval for all existing and future
 clients; numeric values are seconds. The interval must be positive.
 `Input(port='Keyboard')` follows all ports matching
@@ -64,7 +65,9 @@ have `port=None`.
 `Output()` selects the first output. Supplying a string or collection sends to
 all matches, using the shared scanner's cached device list. New devices receive
 subsequent messages without replay. Overlapping patterns open each port once;
-sending with no matching ports raises an error.
+sending with no matching ports raises an error. The same output can send again
+after a device appears. If a match fails to open, already connected devices
+still receive the event and the error identifies the confirmed destinations.
 
 ```python
 import middy as md
