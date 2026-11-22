@@ -6,17 +6,16 @@ release readiness still need the evidence listed at the end.
 
 ## Release and remaining qualification
 
-- **P2. Verify a release candidate and its public dependency contract.**
+- **P2. PyPI release deferred pending a compatible uFor version.**
   Candidate CI supports pull requests and manual runs, checks installed
   playback, and separates locked development dependencies from a fresh
   index-only install. All nine hosted candidate jobs passed. A macOS wheel
   built from the unpacked source distribution also passed the distribution
   checks. The index-only install chose uFor 0.1.0, which rejected the current
-  `FrequencyTable(frequencies=...)` API. Public distribution still requires
-  a passing `check_index` run.
-  The checkout and candidate CI already use the uFor commit in `uv.lock`.
-  The PyPI wheel resolves its published dependency by name. PyPI rejects a
-  Git URL in the wheel's dependency metadata.
+  `FrequencyTable(frequencies=...)` API. Keep using the exact GitHub commit in
+  `uv.lock` for checkout installs and candidate CI. Resume PyPI release work
+  once a compatible uFor version is published. Require a passing
+  `check_index` run for the release candidate before publishing middy.
   ([Candidate run](https://github.com/rec/middy/actions/runs/45019531170),
   [Workflow](../.github/workflows/ci.yml),
   [tuning integration](../middy/tuning.py),

@@ -18,7 +18,7 @@ qualify current revisions, physical instruments or other platforms.
 | Windows MIDI Services | SDK/build integration and native UMP qualification; currently disabled |
 | Linux ALSA sequencer/raw and available UMP variants | Separately authorized runtime checks |
 | Resources | Parent/child memory and CPU, thread/handle counts, sustained load and overload behavior against agreed application budgets |
-| Release | Archive-format freeze, future compatibility promises and publication remain owner decisions |
+| Release | A compatible public uFor release and a passing `check_index` run for the candidate. Archive-format freeze, future compatibility promises, and publication remain owner decisions. |
 
 See the staged [Linux procedure](linux-qualification.md) and
 [open issues](issues.md). Compilation and device-free tests do not establish
@@ -134,6 +134,10 @@ commit, with `check_index` enabled to test the published dependency contract.
 Candidate CI tests the wheel in a separate environment with the locked runtime
 dependencies and also builds a source distribution. For source distribution
 qualification, install the wheel built from the unpacked source archive.
+
+Use the uFor commit pinned in `uv.lock` for checkout installs and candidate
+CI. The PyPI release is deferred until a compatible uFor version is available
+from PyPI and the candidate passes the index-only installation check.
 
 If a released platform fails, pause distribution, identify affected filenames
 and environments in the release notes, and mark the release as affected. If
