@@ -6,16 +6,6 @@ release readiness still need the evidence listed at the end.
 
 ## Reliability and data integrity
 
-### P2. Large packets can exceed memory budgets during untimed preflight
-
-Both APIs now cap untimed source items and generated events, and observe
-cancellation between iterator calls. A single packet can still carry a large
-buffer, and Python retains input values while building its prepared plan.
-Bound retained packet bytes as well as item count, and verify that exceeding
-the byte budget rejects the batch before sending any of it.
-([Rust preparation](../crates/middy/src/output.rs),
-[Python collection](../middy/_clients.py))
-
 ### P2. Reconnect churn can exhaust a recording's archive descriptor budget
 
 An attached recorder declares each new stream and clock, while the archive

@@ -6,6 +6,7 @@ from fractions import Fraction
 from . import events, messages, midi
 
 DEFAULT_SEQUENCE_LIMIT: int
+DEFAULT_SEQUENCE_BYTE_LIMIT: int
 
 class OutputState:
     def __init__(self) -> None: ...
@@ -128,7 +129,8 @@ class AllInputConnection:
 
 def prepare_output(
     encoding: midi.Encoding, message: object
-) -> bytes | midi.UmpPacket | tuple[str, dict[str, int | str], int]: ...
+) -> bytes | midi.UmpPacket | tuple[int, int]: ...
+def prepared_size(value: object) -> int: ...
 def resolve_output_channel(message: object, channel: int | None) -> object: ...
 def schedule_notes(
     value: messages.Note | messages.Chord,

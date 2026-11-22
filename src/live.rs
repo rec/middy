@@ -152,6 +152,17 @@ pub fn prepare_output(
     }
 }
 
+#[pyfunction]
+pub fn prepared_size(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    if let Ok(bytes) = value.cast::<PyBytes>() {
+        return Ok(bytes.as_bytes().len());
+    }
+    if let Ok(packet) = value.extract::<PyRef<'_, UmpPacket>>() {
+        return Ok(std::mem::size_of_val(packet.words.as_slice()));
+    }
+    value.cast::<PyTuple>()?.get_item(1)?.extract()
+}
+
 fn prepare_message(
     py: Python<'_>,
     encoding: Encoding,
@@ -209,8 +220,8 @@ fn prepare_message(
                 )?
                 .into_any());
             }
-            (Encoding::Bytes, Payload::Command(_)) => {
-                return Ok(crate::codecs::prepare_command(encoding, message)?
+            (Encoding::Bytes, Payload::Command(command)) => {
+                return Ok(crate::codecs::prepare_command(&command)?
                     .into_pyobject(py)?
                     .into_any()
                     .unbind());

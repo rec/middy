@@ -507,24 +507,6 @@ pub(crate) fn zone_configuration_to_python(
     )?
     .into_any())
 }
-pub fn command_wire(
-    command: &middy::messages::AnyCommand,
-) -> (String, std::collections::HashMap<String, i64>) {
-    use middy::messages::AnyCommand;
-    match command {
-        AnyCommand::ZoneConfiguration(value) => (
-            "ZoneConfiguration".into(),
-            [
-                ("manager_channel", value.manager_channel()),
-                ("members", value.members()),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.into(), value.into()))
-            .collect(),
-        ),
-        _ => unreachable!("existing commands are handled by messages::command_wire"),
-    }
-}
 fn object<T>(py: Python<'_>, value: T) -> PyResult<Py<PyAny>>
 where
     T: pyo3::PyClass<BaseType = Message>,

@@ -139,27 +139,17 @@ fn expand(py: Python<'_>, command: &Bound<'_, PyAny>) -> PyResult<Vec<Py<PyAny>>
         .collect()
 }
 
-pub fn prepare_command(
-    encoding: crate::packets::Encoding,
-    command: &Bound<'_, PyAny>,
-) -> PyResult<(String, Py<pyo3::types::PyDict>, usize)> {
-    let py = command.py();
-    let command = messages::extract_command(command)?;
-    if encoding != crate::packets::Encoding::Bytes {
-        return Err(crate::errors::CapabilityError::new_err(
-            "compound commands require MIDI 1.0 byte transport",
-        ));
-    }
-    let messages = codecs::expand(&command).map_err(|e| PyValueError::new_err(e.to_string()))?;
+pub fn prepare_command(command: &middy::messages::AnyCommand) -> PyResult<(usize, usize)> {
+    let messages = codecs::expand(command).map_err(|e| PyValueError::new_err(e.to_string()))?;
     use middy::messages::PrimitiveMessage;
+    let mut bytes = 0;
     for message in &messages {
-        message
+        bytes += message
             .encode()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+            .map_err(|e| PyValueError::new_err(e.to_string()))?
+            .len();
     }
-    let total = messages.len();
-    let (name, fields) = messages::command_wire(py, &command)?;
-    Ok((name, fields, total))
+    Ok((messages.len(), bytes))
 }
 
 fn items_to_python(py: Python<'_>, items: Vec<codecs::DecodeItem>) -> PyResult<Vec<Py<PyAny>>> {

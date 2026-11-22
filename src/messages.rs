@@ -881,58 +881,6 @@ pub fn extract_command(command: &Bound<'_, PyAny>) -> PyResult<messages::AnyComm
     crate::profiles::extract_command(command)?
         .ok_or_else(|| PyTypeError::new_err("command must be a supported compound command"))
 }
-pub fn command_wire(
-    py: Python<'_>,
-    command: &messages::AnyCommand,
-) -> PyResult<(String, Py<PyDict>)> {
-    let kwargs = PyDict::new(py);
-    kwargs.set_item("group", command.group())?;
-    let name = match command {
-        messages::AnyCommand::ProgramChange(value) => {
-            kwargs.set_item("program", value.program())?;
-            kwargs.set_item("channel", value.channel())?;
-            kwargs.set_item("version", value.version())?;
-            kwargs.set_item("bank_msb", value.bank_msb())?;
-            kwargs.set_item("bank_lsb", value.bank_lsb())?;
-            "ProgramChange".into()
-        }
-        messages::AnyCommand::ControlChange(value) => {
-            kwargs.set_item("controller", value.controller())?;
-            kwargs.set_item("value", value.value())?;
-            kwargs.set_item("channel", value.channel())?;
-            kwargs.set_item("version", value.version())?;
-            kwargs.set_item("group", value.group())?;
-            kwargs.set_item("resolution", value.resolution())?;
-            "ControlChange".into()
-        }
-        messages::AnyCommand::ParameterSet(value) => {
-            kwargs.set_item("parameter", value.parameter())?;
-            kwargs.set_item("value", value.value())?;
-            kwargs.set_item("resolution", value.resolution())?;
-            kwargs.set_item("channel", value.channel())?;
-            kwargs.set_item("family", family_name(value.family()))?;
-            "ParameterSet".into()
-        }
-        messages::AnyCommand::ParameterStep(value) => {
-            let value = ParameterStep {
-                value: value.clone(),
-            };
-            kwargs.set_item("parameter", value.parameter())?;
-            kwargs.set_item("direction", value.direction())?;
-            kwargs.set_item("channel", value.channel())?;
-            kwargs.set_item("family", value.family())?;
-            "ParameterStep".into()
-        }
-        _ => {
-            let (name, fields) = crate::profiles::command_wire(command);
-            for (key, value) in fields {
-                kwargs.set_item(key, value)?;
-            }
-            name
-        }
-    };
-    Ok((name, kwargs.unbind()))
-}
 fn family_name(family: middy::controls::ParameterFamily) -> &'static str {
     match family {
         middy::controls::ParameterFamily::Rpn => "rpn",

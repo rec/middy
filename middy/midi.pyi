@@ -248,6 +248,7 @@ class Output(ResourceModel):
     channel: int | None
     bpm: int | float | None
     sequence_limit: int
+    sequence_byte_limit: int
     port: str | list[str] | None
     encoding: Encoding
     backend: Backend | None
@@ -262,6 +263,7 @@ class Output(ResourceModel):
         channel: int | None = None,
         bpm: int | float | str | None = None,
         sequence_limit: int = 65_536,
+        sequence_byte_limit: int = 67_108_864,
         port: str | Iterable[str] | None = None,
         encoding: Encoding = Encoding.Bytes,
         backend: Backend | None = None,

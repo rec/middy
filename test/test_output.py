@@ -191,6 +191,18 @@ def test_untimed_preflight_limits_iterables_and_generated_events(
     output.close()
 
 
+def test_untimed_preflight_counts_packet_bytes_before_sending(
+    transport: NativeConnection,
+) -> None:
+    output = midi.Output(sequence_byte_limit=7)
+    with pytest.raises(ValueError, match="sequence byte limit"):
+        output.send(iter([b"\xf0\x01\x02\xf7", messages.SysEx(b"\x7d\x01")]))
+    assert transport.packets() == []
+    assert output.send(b"\xf0\x01\x02\xf7", messages.NoteOff(60)).sent_events == 2
+    assert transport.packets() == [b"\xf0\x01\x02\xf7", b"\x80\x3c\x00"]
+    output.close()
+
+
 def test_cancellation_during_preflight_sends_nothing(
     transport: NativeConnection,
 ) -> None:

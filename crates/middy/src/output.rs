@@ -43,6 +43,7 @@ pub struct Output {
     channel: Option<u8>,
     bpm: Option<Rational>,
     sequence_limit: usize,
+    sequence_byte_limit: usize,
     playback: PlaybackOptions,
     client: Option<transport::Output>,
     connection: Option<Connection>,
@@ -53,6 +54,7 @@ pub struct Output {
 }
 
 pub const DEFAULT_SEQUENCE_LIMIT: usize = 65_536;
+pub const DEFAULT_SEQUENCE_BYTE_LIMIT: usize = 64 * 1024 * 1024;
 
 /// One element of a heterogeneous output sequence. `From` conversions allow
 /// notes, rests, messages, packets, Duration and Beats to be passed directly.
@@ -206,6 +208,7 @@ impl Output {
             channel: None,
             bpm: None,
             sequence_limit: DEFAULT_SEQUENCE_LIMIT,
+            sequence_byte_limit: DEFAULT_SEQUENCE_BYTE_LIMIT,
             playback: PlaybackOptions::default(),
             client: None,
             connection: None,
@@ -225,6 +228,14 @@ impl Output {
             return Err(invalid("sequence limit must be positive").into());
         }
         self.sequence_limit = limit;
+        Ok(self)
+    }
+    /// Limit encoded packet bytes retained in one untimed playback batch.
+    pub fn with_sequence_byte_limit(mut self, limit: usize) -> crate::midi::Result<Self> {
+        if limit == 0 {
+            return Err(invalid("sequence byte limit must be positive").into());
+        }
+        self.sequence_byte_limit = limit;
         Ok(self)
     }
     pub fn with_channel(mut self, channel: i64) -> crate::midi::Result<Self> {
@@ -603,12 +614,14 @@ impl Output {
             ));
         }
         let mut plan = Vec::new();
+        let mut bytes_remaining = self.sequence_byte_limit;
         for (index, value) in values.into_iter().enumerate() {
             if index >= self.sequence_limit {
                 return Err(sequence_limit_error());
             }
             let start = nanoseconds(*elapsed)?;
             let rounded = elapsed.multiply(1_000_000_000, 1)?.denominator() != 1;
+            let prepared_before = plan.len();
             match value? {
                 OutputValue::Record(_) => {
                     return Err(invalid("archive record requires source normalization"))
@@ -636,6 +649,15 @@ impl Output {
             }
             if plan.len() > self.sequence_limit {
                 return Err(sequence_limit_error());
+            }
+            for (_, packet, _) in &plan[prepared_before..] {
+                if let Some(packet) = packet {
+                    bytes_remaining = bytes_remaining
+                        .checked_sub(packet.wire_bytes())
+                        .ok_or_else(|| {
+                            invalid("untimed playback exceeds the sequence byte limit")
+                        })?;
+                }
             }
         }
         plan.push((nanoseconds(*elapsed)?, None, false));
@@ -881,6 +903,16 @@ enum Prepared {
         start: Option<u8>,
         end: bool,
     },
+}
+impl Prepared {
+    fn wire_bytes(&self) -> usize {
+        match self {
+            Self::Packet(Packet::Bytes(bytes)) => bytes.len(),
+            Self::Packet(Packet::Ump(words)) => std::mem::size_of_val(words.as_slice()),
+            Self::Command { packets, .. } => packets.iter().map(Vec::len).sum(),
+            Self::Mpe { packet, .. } => packet.wire_bytes(),
+        }
+    }
 }
 fn replay_message(record: io::Result<crate::archive::Record>) -> Option<io::Result<Payload>> {
     use crate::archive::Record;
@@ -1695,6 +1727,25 @@ mod tests {
             .unwrap();
         assert!(report.cancelled && report.sent_events == 0);
         assert!(fixture.packets().is_empty());
+    }
+
+    #[test]
+    fn untimed_preflight_rejects_packet_bytes_above_the_budget() {
+        let mut fixture = Fixture::new();
+        fixture.output = fixture.output.with_sequence_byte_limit(7).unwrap();
+        let first = OutputValue::from(vec![0xf0, 1, 2, 0xf7]);
+        let second = OutputValue::from(messages::SysEx::new(vec![0x7d, 1]).unwrap());
+        let failure = fixture.output.send([first.clone(), second]).unwrap_err();
+        assert!(failure.to_string().contains("sequence byte limit"));
+        assert!(fixture.packets().is_empty());
+        fixture
+            .output
+            .send([first, messages::NoteOff::new(60).unwrap().into()])
+            .unwrap();
+        assert_eq!(
+            fixture.packets(),
+            bytes(&[b"\xf0\x01\x02\xf7", b"\x80\x3c\x00"])
+        );
     }
 
     #[test]

@@ -871,10 +871,11 @@ must be selected before discovery or connection. In-process remains the default;
 empty sends never start a worker. Rust applications do not require Python.
 
 Untimed playback validates each batch before its first send. The default limit
-is 65,536 source items and 65,536 scheduled events per batch. Set
-`Output(sequence_limit=...)` in Python or `.with_sequence_limit(...)?` in
-Rust to change it. Cancellation stops between iterator calls. The iterator
-itself must return for playback to observe cancellation.
+is 65,536 source items, 65,536 scheduled events, and 64 MiB of encoded packet
+data per batch. Set `sequence_limit` and `sequence_byte_limit` on Python
+`Output`. Rust provides `with_sequence_limit` and `with_sequence_byte_limit`.
+Cancellation stops between iterator calls. The iterator itself must return for
+playback to observe cancellation.
 From this checkout, install the standalone worker with
 `cargo install --path crates/middy --bin middy-worker`, or provide its executable
 path explicitly.

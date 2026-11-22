@@ -4,7 +4,8 @@ pub use crate::input::{Input, InputErrors, PortPatterns, Recording, RecordingOpt
 #[doc(hidden)]
 pub use crate::output::{select_port_index, OutputGroup, OutputState};
 pub use crate::output::{
-    Output, OutputSource, OutputValue, PlaybackOptions, DEFAULT_SEQUENCE_LIMIT,
+    Output, OutputSource, OutputValue, PlaybackOptions, DEFAULT_SEQUENCE_BYTE_LIMIT,
+    DEFAULT_SEQUENCE_LIMIT,
 };
 pub use crate::transport::scanner::set_scan_interval;
 pub use crate::transport::subprocess::SubprocessOptions;

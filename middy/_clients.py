@@ -441,6 +441,9 @@ class Output(_Client, frozen=True):
     sequence_limit: int = Field(
         default=_native.DEFAULT_SEQUENCE_LIMIT, strict=True, gt=0
     )
+    sequence_byte_limit: int = Field(
+        default=_native.DEFAULT_SEQUENCE_BYTE_LIMIT, strict=True, gt=0
+    )
 
     _native_client: _native.Output | None = PrivateAttr(default=None)
     _connection: _OutputState | None = PrivateAttr(default=None)
@@ -635,77 +638,97 @@ class Output(_Client, frozen=True):
             if pending:
                 plan, elapsed = self._prepare_sequence(pending, elapsed)
                 yield from plan
+                plan.clear()
                 pending.clear()
-            base = elapsed
-            mode: bool | None = None
-            planner: events.PlaybackPlan | None = None
-            ordinary: list[object] = []
-            skipped = 0
-            for m in cast(Iterable[object], v):
+            source = self._source_items(cast(Iterable[object], v), cancel)
+            try:
+                first = next(source)
+            except StopIteration:
+                continue
+            items = chain((first,), source)
+            if not isinstance(first, messages.Message) or first.timestamp is None:
+                plan, elapsed = self._prepare_sequence(
+                    items, elapsed, untimed_source=True
+                )
                 if cancel is not None and cancel.cancelled:
                     return
-                if isinstance(m, (events.Clock, archive.Stream, archive.Metadata)):
-                    skipped += 1
-                    if skipped > self.sequence_limit:
-                        raise ValueError("playback source exceeds the sequence limit")
-                    continue
-                skipped = 0
-                timed = isinstance(m, messages.Message) and m.timestamp is not None
-                if mode is None:
-                    mode = timed
-                elif mode != timed:
+                yield from plan
+                plan.clear()
+                continue
+            base = elapsed
+            planner = events.PlaybackPlan(
+                origin=origin or first.timestamp,
+                mappings=mappings,
+                allow_rounding=allow_rounding,
+            )
+            for m in items:
+                if not isinstance(m, messages.Message) or m.timestamp is None:
                     raise ValueError(
                         "cannot mix timestamped and untimestamped values "
                         "within one source"
                     )
-                if timed:
-                    assert isinstance(m, messages.Message)
-                    assert m.timestamp is not None
-                    if planner is None:
-                        planner = events.PlaybackPlan(
-                            origin=origin or m.timestamp,
-                            mappings=mappings,
-                            allow_rounding=allow_rounding,
-                        )
-                    planned = planner.deadline(m)
-                    elapsed = base + Fraction(planned.delay_ns, 1_000_000_000)
-                    plan, _ = self._prepare_sequence([m], elapsed)
-                    for deadline, value, _ in plan:
-                        if value is not None:
-                            yield (
-                                deadline,
-                                value,
-                                planned.rounding_error_ns.numerator != 0,
-                            )
-                else:
-                    if isinstance(
-                        m,
-                        (
-                            events.StreamDiagnostic,
-                            archive.Gap,
-                            archive.Discontinuity,
-                            archive.Opaque,
-                        ),
-                    ):
-                        raise ValueError(
-                            "gap, discontinuity or opaque data requires "
-                            "an explicit send policy"
-                        )
-                    ordinary.append(m)
-                    if len(ordinary) > self.sequence_limit:
-                        raise ValueError("untimed playback exceeds the sequence limit")
-            if ordinary:
-                plan, elapsed = self._prepare_sequence(ordinary, elapsed)
-                yield from plan
+                planned = planner.deadline(m)
+                elapsed = base + Fraction(planned.delay_ns, 1_000_000_000)
+                deadline = round(elapsed * 1_000_000_000)
+                if deadline > 2**64 - 1:
+                    raise ValueError("delay exceeds scheduler range")
+                resolved = _native.resolve_output_channel(m, self.channel)
+                prepared = _native.prepare_output(self.encoding, resolved)
+                yield (
+                    deadline,
+                    resolved if isinstance(prepared, tuple) else prepared,
+                    planned.rounding_error_ns.numerator != 0,
+                )
         if pending:
             plan, elapsed = self._prepare_sequence(pending, elapsed)
             yield from plan
 
+    def _source_items(
+        self, source: Iterable[object], cancel: events.Cancellation | None
+    ) -> Iterator[object]:
+        skipped = 0
+        for item in source:
+            if cancel is not None and cancel.cancelled:
+                return
+            if isinstance(item, (events.Clock, archive.Stream, archive.Metadata)):
+                skipped += 1
+                if skipped > self.sequence_limit:
+                    raise ValueError("playback source exceeds the sequence limit")
+                continue
+            skipped = 0
+            yield item
+
     def _prepare_sequence(
-        self, values: Iterable[object], elapsed: Fraction
+        self,
+        values: Iterable[object],
+        elapsed: Fraction,
+        *,
+        untimed_source: bool = False,
     ) -> tuple[list[tuple[int, object, bool]], Fraction]:
         timeline: list[tuple[int, object, bool]] = []
-        for v in values:
+        remaining_bytes = self.sequence_byte_limit
+        for index, v in enumerate(values):
+            if index >= self.sequence_limit:
+                raise ValueError("untimed playback exceeds the sequence limit")
+            if untimed_source:
+                if isinstance(v, messages.Message) and v.timestamp is not None:
+                    raise ValueError(
+                        "cannot mix timestamped and untimestamped values "
+                        "within one source"
+                    )
+                if isinstance(
+                    v,
+                    (
+                        events.StreamDiagnostic,
+                        archive.Gap,
+                        archive.Discontinuity,
+                        archive.Opaque,
+                    ),
+                ):
+                    raise ValueError(
+                        "gap, discontinuity or opaque data requires "
+                        "an explicit send policy"
+                    )
             deadline = round(elapsed * 1_000_000_000)
             rounded = (elapsed * 1_000_000_000).denominator != 1
             if isinstance(v, (messages.Note, messages.Chord)):
@@ -719,6 +742,11 @@ class Output(_Client, frozen=True):
                 for index, (offset, message) in enumerate(planned):
                     at_ns = (elapsed + Fraction(*offset)) * 1_000_000_000
                     prepared = _native.prepare_output(self.encoding, message)
+                    remaining_bytes -= _native.prepared_size(prepared)
+                    if remaining_bytes < 0:
+                        raise ValueError(
+                            "untimed playback exceeds the sequence byte limit"
+                        )
                     value: object = message if isinstance(prepared, tuple) else prepared
                     if members:
                         value = _MpeStep(
@@ -740,6 +768,9 @@ class Output(_Client, frozen=True):
             else:
                 v = _native.resolve_output_channel(v, self.channel)
                 prepared = _native.prepare_output(self.encoding, v)
+                remaining_bytes -= _native.prepared_size(prepared)
+                if remaining_bytes < 0:
+                    raise ValueError("untimed playback exceeds the sequence byte limit")
                 timeline.append(
                     (deadline, v if isinstance(prepared, tuple) else prepared, rounded)
                 )
@@ -914,12 +945,16 @@ class _OutputState:
             self._mpe_pending = True
             self._native.send_mpe(*value)
             return
-        prepared = _native.prepare_output(self._encoding, value)
+        prepared = (
+            value
+            if isinstance(value, (bytes, midi.UmpPacket))
+            else _native.prepare_output(self._encoding, value)
+        )
         if isinstance(prepared, tuple):
             if self._state is None:
                 self._native.send_command(value)
                 return
-            total = prepared[2]
+            total = prepared[0]
             packets = [
                 codecs.encode(m)
                 for m in cast(
