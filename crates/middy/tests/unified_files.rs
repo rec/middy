@@ -131,6 +131,28 @@ fn write_checks_the_format_before_overwriting() {
     std::fs::remove_file(path).unwrap();
 }
 
+#[test]
+fn sysex_backup_overwrite_keeps_the_old_dump_until_success() {
+    let path = output_path("syx");
+    let old = [0xf0, 0x7d, 1, 0xf7];
+    std::fs::write(&path, old).unwrap();
+    let message = middy::SysEx::new(vec![0x7d, 2]).unwrap();
+    let interrupted = middy::write(
+        [Ok(message.clone()), Err(io::Error::other("capture failed"))],
+        &path,
+        true,
+    )
+    .unwrap_err();
+    assert_eq!(interrupted.to_string(), "capture failed");
+    let empty = middy::write([Ok(NoteOn::new(60).unwrap())], &path, true).unwrap_err();
+    assert!(empty.to_string().contains("no SysEx messages"));
+    assert_eq!(std::fs::read(&path).unwrap(), old);
+
+    middy::write([Ok(message)], &path, true).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), [0xf0, 0x7d, 2, 0xf7]);
+    std::fs::remove_file(path).unwrap();
+}
+
 fn output_path(extension: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!(
         "middy-write-{}-{}.{extension}",

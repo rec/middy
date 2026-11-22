@@ -1,26 +1,112 @@
 //! Bounded file I/O with byte locations. No native MIDI initialization.
 use crate::messages::{Message, PrimitiveMessage};
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 pub(crate) mod syx;
 
 pub const DEFAULT_LIMIT: usize = 1_048_576;
 
 /// Write a fallible record stream, choosing the format from the filename.
-/// Existing files are preserved unless overwrite is true. A failure can leave
-/// a partial destination; the writer is finished only after successful iteration.
+/// With overwrite enabled, replace the destination only after successful completion.
+/// Exclusive creation can leave a partial new file on failure.
 /// SYX output selects SysEx messages, discards timing and other MIDI traffic,
-/// and rejects recorded gaps and discontinuities.
+/// and rejects empty selections, recorded gaps and discontinuities.
 pub fn write<T: WriteRecord>(
     records: impl IntoIterator<Item = io::Result<T>>,
     filename: impl AsRef<std::path::Path>,
     overwrite: bool,
 ) -> io::Result<()> {
-    let mut writer = Writer::create_with_overwrite(filename, overwrite)?;
-    for record in records {
-        writer.write(&record?)?;
+    write_file(
+        filename.as_ref(),
+        overwrite,
+        |error| error,
+        |writer| {
+            for record in records {
+                writer.write(&record?)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Shared path-writing transaction used by the language binding.
+#[doc(hidden)]
+pub fn write_file<E>(
+    path: &Path,
+    overwrite: bool,
+    map_error: impl Fn(io::Error) -> E,
+    fill: impl FnOnce(&mut Writer) -> Result<(), E>,
+) -> Result<(), E> {
+    let path = std::path::absolute(path).map_err(&map_error)?;
+    let extension = path_extension(&path);
+    validate_extension(extension).map_err(&map_error)?;
+    let (file, pending) = if overwrite {
+        let (file, pending) = PendingFile::new(&path).map_err(&map_error)?;
+        (file, Some(pending))
+    } else {
+        (
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(&map_error)?,
+            None,
+        )
+    };
+    let mut writer = Writer::new(file, extension, DEFAULT_LIMIT).map_err(&map_error)?;
+    fill(&mut writer)?;
+    if extension.eq_ignore_ascii_case("syx") && !writer.sysex_written {
+        return Err(map_error(invalid(
+            0,
+            "SYX backup contains no SysEx messages",
+        )));
     }
-    writer.finish()
+    writer.finish().map_err(&map_error)?;
+    if let Some(mut pending) = pending {
+        std::fs::rename(&pending.0, &path).map_err(&map_error)?;
+        pending.0.clear();
+    }
+    Ok(())
+}
+
+struct PendingFile(PathBuf);
+
+impl PendingFile {
+    fn new(path: &Path) -> io::Result<(std::fs::File, Self)> {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        for _ in 0..32 {
+            let identity = crate::events::fresh_identity("write")?;
+            let path = parent.join(format!(".middy-{:016x}.tmp", {
+                use std::hash::{BuildHasher, RandomState};
+                RandomState::new().hash_one(identity)
+            }));
+            match options.open(&path) {
+                Ok(file) => return Ok((file, Self(path))),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => (),
+                Err(error) => return Err(error),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not create a temporary MIDI file",
+        ))
+    }
+}
+
+impl Drop for PendingFile {
+    fn drop(&mut self) {
+        if !self.0.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
 }
 
 pub fn invalid(offset: u64, reason: impl std::fmt::Display) -> io::Error {
@@ -461,26 +547,22 @@ enum Output<W> {
 pub struct Writer<W = std::fs::File> {
     output: Option<Output<W>>,
     limit: usize,
+    sysex_written: bool,
 }
 impl Writer {
     pub fn create(path: impl AsRef<std::path::Path>) -> io::Result<Self> {
-        Self::create_with_overwrite(path, false)
-    }
-    fn create_with_overwrite(
-        path: impl AsRef<std::path::Path>,
-        overwrite: bool,
-    ) -> io::Result<Self> {
         let path = path.as_ref();
-        let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
+        let extension = path_extension(path);
         validate_extension(extension)?;
         let file = std::fs::OpenOptions::new()
             .write(true)
-            .create(overwrite)
-            .truncate(overwrite)
-            .create_new(!overwrite)
+            .create_new(true)
             .open(path)?;
         Self::new(file, extension, DEFAULT_LIMIT)
     }
+}
+fn path_extension(path: &Path) -> &str {
+    path.extension().and_then(|v| v.to_str()).unwrap_or("")
 }
 fn validate_extension(extension: &str) -> io::Result<()> {
     match extension.to_ascii_lowercase().as_str() {
@@ -508,6 +590,7 @@ impl<W: Write + std::io::Seek> Writer<W> {
         Ok(Self {
             output: Some(output),
             limit,
+            sysex_written: false,
         })
     }
     /// SYX output selects SysEx messages and ignores clock/stream declarations,
@@ -526,6 +609,7 @@ impl<W: Write + std::io::Seek> Writer<W> {
                 )) = message.as_ref()
                 {
                     syx::write(writer, message, self.limit)?;
+                    self.sysex_written = true;
                 }
                 Ok(())
             }

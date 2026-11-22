@@ -69,6 +69,30 @@ def test_write_validates_format_before_overwriting(tmp_path: Path) -> None:
     assert destination.read_bytes() == b"keep"
 
 
+def test_syx_overwrite_preserves_backup_until_a_nonempty_capture_finishes(
+    tmp_path: Path,
+) -> None:
+    destination = tmp_path / "backup.syx"
+    original = b"\xf0\x7d\x01\xf7"
+    destination.write_bytes(original)
+    failure = RuntimeError("source stopped")
+
+    def incomplete() -> Iterator[md.SysEx]:
+        yield md.SysEx(b"\x7d\x02")
+        raise failure
+
+    with pytest.raises(RuntimeError) as raised:
+        md.write(incomplete(), destination, overwrite=True)
+    assert raised.value is failure
+    with pytest.raises(OSError, match="no SysEx messages"):
+        md.write([md.NoteOn(60)], destination, overwrite=True)
+    assert destination.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [destination]
+
+    md.write([md.NoteOn(60), md.SysEx(b"\x7d\x03")], destination, overwrite=True)
+    assert destination.read_bytes() == b"\xf0\x7d\x03\xf7"
+
+
 def midi_file(path: Path) -> tuple[md.smf.Header, list[md.smf.Event]]:
     header = md.smf.Header(format=1, tracks=2, division=480, extra=b"xy")
     records = [

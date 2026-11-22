@@ -97,30 +97,6 @@ cancellation during iteration in the regression cases.
 [Python collection](../middy/_clients.py#L623),
 [Python cancellation](../src/playback.rs#L182))
 
-### P2. A failed overwrite can destroy the last usable backup
-
-`write(..., overwrite=True)` truncates the named file before it reads the
-first record. An invalid record, iterator exception, or disk error can replace
-a valid tuning dump or capture with an empty file or a valid-looking prefix.
-The low-level partial-file behavior is documented. The one-call backup
-operation would benefit from committing a completed sibling file atomically,
-with explicit treatment of exclusive creation and pre-existing destinations.
-Test failure before the first record and after a valid prefix.
-([Rust write contract](../crates/middy/src/file_io.rs#L9),
-[Rust file open](../crates/middy/src/file_io.rs#L457),
-[Python write](../src/file_io.rs#L400))
-
-### P2. A SysEx backup can succeed without any SysEx
-
-The `.syx` writer skips all non-SysEx events. A capture from the wrong
-device, or a request that gets no reply, can therefore produce an empty
-successful backup. The file write API returns no counts to distinguish that
-case from an actual backup. Keep mixed-traffic selection and make the empty
-outcome detectable for callers using the backup example. Include gap and
-discontinuity behavior in any regression test of the reporting contract.
-([Writer filter](../crates/middy/src/file_io.rs#L506),
-[backup example](../doc/examples.md#L163))
-
 ### P2. Reconnect churn can exhaust a recording's archive descriptor budget
 
 An attached recorder declares each new stream and clock, while the archive

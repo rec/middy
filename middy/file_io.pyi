@@ -25,7 +25,12 @@ def write(
     ],
     filename: str | PathLike[str],
     overwrite: bool = False,
-) -> None: ...
+) -> None:
+    """Write records to a path. Overwrite replaces it after successful completion.
+
+    A SYX backup must contain at least one SysEx message.
+    """
+    ...
 
 class Reader:
     """Own one cursor; choose ordinary, merged or timed iteration before reading.

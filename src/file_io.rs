@@ -274,7 +274,6 @@ impl Writer {
         destination: &Bound<'_, PyAny>,
         format: Option<&str>,
         payload_limit: usize,
-        overwrite: bool,
     ) -> PyResult<Self> {
         let extension = if destination.hasattr("write")? {
             format.unwrap_or("middy").to_ascii_lowercase()
@@ -301,11 +300,7 @@ impl Writer {
         Ok(Self {
             value: Some(
                 model::Writer::new(
-                    if overwrite {
-                        Stream::output(destination)?
-                    } else {
-                        Stream::exclusive_output(destination)?
-                    },
+                    Stream::exclusive_output(destination)?,
                     &extension,
                     payload_limit,
                 )
@@ -323,34 +318,10 @@ impl Writer {
         format: Option<&str>,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
     ) -> PyResult<Self> {
-        Self::open(destination, format, payload_limit, false)
+        Self::open(destination, format, payload_limit)
     }
     fn write(&mut self, py: Python<'_>, record: &Bound<'_, PyAny>) -> PyResult<()> {
-        let record = if let Ok(header) = record.extract::<PyRef<'_, crate::files::Header>>() {
-            model::Record::Header(header.value.clone())
-        } else if let Ok(event) = record.extract::<PyRef<'_, crate::files::Event>>() {
-            model::Record::Event(event.value.clone())
-        } else {
-            match crate::archive::extract(record) {
-                Ok(value) => model::Record::Archive(value),
-                Err(_) if record.is_instance_of::<crate::messages::Message>() => {
-                    let wire = crate::messages::encode_message(record)?;
-                    if wire.first() != Some(&240) || wire.last() != Some(&247) {
-                        return Err(PyValueError::new_err("expected a structured SysEx message"));
-                    }
-                    let message = middy::messages::SysEx::new(wire[1..wire.len() - 1].to_vec())
-                        .map_err(|e| PyValueError::new_err(e.to_string()))?;
-                    let payload = crate::event_values::with_metadata(
-                        record,
-                        middy::events::Payload::Message(middy::messages::AnyMessage::SysEx(
-                            message,
-                        )),
-                    )?;
-                    model::Record::Archive(middy::archive::Record::Event(Box::new(payload)))
-                }
-                Err(error) => return Err(error),
-            }
-        };
+        let record = record_value(record)?;
         let writer = self.value.as_mut().ok_or_else(closed)?;
         py.detach(|| writer.write(&record)).map_err(os_error)
     }
@@ -389,6 +360,33 @@ impl Writer {
     }
 }
 
+fn record_value(record: &Bound<'_, PyAny>) -> PyResult<model::Record> {
+    let value = if let Ok(header) = record.extract::<PyRef<'_, crate::files::Header>>() {
+        model::Record::Header(header.value.clone())
+    } else if let Ok(event) = record.extract::<PyRef<'_, crate::files::Event>>() {
+        model::Record::Event(event.value.clone())
+    } else {
+        match crate::archive::extract(record) {
+            Ok(value) => model::Record::Archive(value),
+            Err(_) if record.is_instance_of::<crate::messages::Message>() => {
+                let wire = crate::messages::encode_message(record)?;
+                if wire.first() != Some(&240) || wire.last() != Some(&247) {
+                    return Err(PyValueError::new_err("expected a structured SysEx message"));
+                }
+                let message = middy::messages::SysEx::new(wire[1..wire.len() - 1].to_vec())
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                let payload = crate::event_values::with_metadata(
+                    record,
+                    middy::events::Payload::Message(middy::messages::AnyMessage::SysEx(message)),
+                )?;
+                model::Record::Archive(middy::archive::Record::Event(Box::new(payload)))
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    Ok(value)
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Reader>()?;
     module.add_class::<MergedEvents>()?;
@@ -398,9 +396,9 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Write an iterable of records using the filename's format and finish on success.
-/// Preserve existing files unless overwrite is true; failures can leave a partial file.
+/// With overwrite enabled, replace the destination only after successful completion.
 /// SYX output selects SysEx messages, discards timing and other MIDI traffic,
-/// and rejects recorded gaps and discontinuities.
+/// and rejects empty selections, recorded gaps and discontinuities.
 #[pyfunction]
 #[pyo3(signature=(records,filename,overwrite=false))]
 fn write(
@@ -410,10 +408,22 @@ fn write(
     #[pyo3(from_py_with=crate::ump::boolean)] overwrite: bool,
 ) -> PyResult<()> {
     let records = records.try_iter()?;
-    let filename = filename.into_pyobject(py)?;
-    let mut writer = Writer::open(filename.as_any(), None, model::DEFAULT_LIMIT, overwrite)?;
-    for record in records {
-        writer.write(py, &record?)?;
-    }
-    writer.finish(py, true, "")
+    model::write_file(
+        &filename,
+        overwrite,
+        |error| {
+            if error.kind() == std::io::ErrorKind::InvalidInput && error.raw_os_error().is_none() {
+                PyValueError::new_err(error.to_string())
+            } else {
+                os_error(error)
+            }
+        },
+        |writer| {
+            for record in records {
+                let record = record_value(&record?)?;
+                py.detach(|| writer.write(&record)).map_err(os_error)?;
+            }
+            Ok(())
+        },
+    )
 }
