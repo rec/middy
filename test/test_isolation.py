@@ -958,15 +958,19 @@ def test_scan_interval_changes_existing_and_future_inputs_and_outputs(
                 set_scan_interval(0)
             sleep(0.2)
             assert scans.read_text() == before
+            previous = Counter(s.split("\t")[1] for s in before.splitlines())
             set_scan_interval(0.02)
             deadline = monotonic() + 3
-            while len(scans.read_text().splitlines()) < len(before.splitlines()) + 6:
+            while True:
+                counts = Counter(
+                    s.split("\t")[1] for s in scans.read_text().splitlines()
+                )
+                if all(counts[d] >= previous[d] + 3 for d in ("true", "false")):
+                    break
                 assert monotonic() < deadline, (
                     "interval update did not wake the scanner"
                 )
                 sleep(0.005)
-            counts = Counter(s.split("\t")[1] for s in scans.read_text().splitlines())
-            assert counts["true"] >= 4 and counts["false"] >= 4
     finally:
         set_scan_interval("100 ms")
 

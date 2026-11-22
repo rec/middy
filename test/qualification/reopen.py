@@ -45,7 +45,8 @@ def test_direct_endpoint_replacement(executable: Path) -> None:
     try:
         stdout, stderr = child.communicate(timeout=20)
     except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
+        if sys.platform == "darwin":
+            os.killpg(child.pid, signal.SIGKILL)
         stdout, stderr = child.communicate(timeout=10)
         pytest.fail(f"Event-driven probe deadline exceeded\n{stdout}\n{stderr}")
     print(

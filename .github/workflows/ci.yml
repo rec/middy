@@ -164,28 +164,9 @@ jobs:
           uv pip install --python "$wheel_python" pytest
           uv pip check --python "$wheel_python"
           cd "$RUNNER_TEMP"
-          "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test/test_contract.py" "$GITHUB_WORKSPACE/test/test_packets.py" "$GITHUB_WORKSPACE/test/test_isolation.py" "$GITHUB_WORKSPACE/test/test_messages.py" "$GITHUB_WORKSPACE/test/test_codecs.py" "$GITHUB_WORKSPACE/test/test_controls.py" "$GITHUB_WORKSPACE/test/test_tuning.py" "$GITHUB_WORKSPACE/test/test_profiles.py" "$GITHUB_WORKSPACE/test/test_profile_engines.py" "$GITHUB_WORKSPACE/test/test_ump.py" "$GITHUB_WORKSPACE/test/test_files.py" "$GITHUB_WORKSPACE/test/test_archive.py" "$GITHUB_WORKSPACE/test/test_live.py" "$GITHUB_WORKSPACE/test/test_file_timing.py" "$GITHUB_WORKSPACE/test/test_event_views.py" "$GITHUB_WORKSPACE/test/test_ci.py" "$GITHUB_WORKSPACE/test/test_ufor_tuning.py"
-          "$wheel_python" -m pytest \
-            "$GITHUB_WORKSPACE/test/test_inspection.py" \
-            "$GITHUB_WORKSPACE/test/test_note_inspection.py" \
-            "$GITHUB_WORKSPACE/test/test_notes.py" \
-            "$GITHUB_WORKSPACE/test/test_comparison.py" \
-            "$GITHUB_WORKSPACE/test/test_cli.py" \
-            "$GITHUB_WORKSPACE/test/test_monitor.py" \
-            "$GITHUB_WORKSPACE/test/test_routing.py" \
-            "$GITHUB_WORKSPACE/test/test_patch.py" \
-            "$GITHUB_WORKSPACE/test/test_topology.py" \
-            "$GITHUB_WORKSPACE/test/test_discovery.py" \
-            "$GITHUB_WORKSPACE/test/test_sysex_send.py" \
-            "$GITHUB_WORKSPACE/test/test_transfer_cli.py" \
-            "$GITHUB_WORKSPACE/test/test_ci_browser.py" \
-            "$GITHUB_WORKSPACE/test/test_testing.py" \
-            "$GITHUB_WORKSPACE/test/test_metrics.py" \
-            "$GITHUB_WORKSPACE/test/test_output.py" \
-            "$GITHUB_WORKSPACE/test/test_capture_cli.py" \
-            "$GITHUB_WORKSPACE/test/test_tuning_query.py" \
-            "$GITHUB_WORKSPACE/test/test_tuning_cli.py" \
-            "$GITHUB_WORKSPACE/test/test_ufor_cli.py"
+          "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test" \
+            --ignore="$GITHUB_WORKSPACE/test/test_public_symbols.py" \
+            --ignore="$GITHUB_WORKSPACE/test/test_callbacks.py"
       - name: Check wheel installation with only published dependencies
         if: runner.os == 'Linux' && (github.event_name == 'release' || inputs.check_index)
         run: |
