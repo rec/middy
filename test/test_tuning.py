@@ -32,7 +32,7 @@ def test_bank_absence_is_distinct_from_zero_and_note_change_realtime_is_checked(
         decoded = tuning.decode(messages.SysEx(codecs.encode(value)[1:-1]))
         assert decoded is not None and decoded.message == value
     with pytest.raises(TypeError):
-        request.replace(bank=True)  # ty: ignore[invalid-argument-type]
+        request.replace(bank=True)
 
 
 def tuning_vectors() -> Iterator[tuple[messages.Message, bytes]]:

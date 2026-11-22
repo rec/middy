@@ -65,6 +65,14 @@ def test_shared_vectors_preserve_every_family_and_frozen_native_values() -> None
                 "ParameterController",
                 "RelativeParameterController",
             }:
+                assert isinstance(
+                    value,
+                    (
+                        messages.PerNoteController,
+                        messages.ParameterController,
+                        messages.RelativeParameterController,
+                    ),
+                )
                 assert value.family == (
                     "assignable" if "Assignable" in name else "registered"
                 )
@@ -84,7 +92,7 @@ def test_shared_vectors_preserve_every_family_and_frozen_native_values() -> None
     for field in inspect.signature(type(on)).parameters:
         for v in (True, 1.0, "1"):
             with pytest.raises(TypeError):
-                on.replace(**{field: v})
+                on.replace(**{field: v})  # ty: ignore[invalid-argument-type]
     for changes in (
         {"group": 0},
         {"channel": 17},
@@ -94,7 +102,7 @@ def test_shared_vectors_preserve_every_family_and_frozen_native_values() -> None
         {"attribute_type": 0, "attribute_data": 1},
     ):
         with pytest.raises(ValueError):
-            on.replace(**changes)
+            on.replace(**changes)  # ty: ignore[invalid-argument-type]
 
 
 def test_word_framing_recovers_without_confusing_byte_order_or_transport_buffers() -> (

@@ -13,6 +13,7 @@ from middy import (
     Tuning,
     cli,
     file_io,
+    messages,
     midi,
     tuning,
 )
@@ -69,7 +70,9 @@ def test_scala_export_converts_each_selected_note(
     report = json.loads(capsys.readouterr().out)
     assert report["converted_keys"] == 4
     plan = list(file_io.Reader(destination))
-    decoded = tuning.decode(plan[0])
+    message = plan[0]
+    assert isinstance(message, messages.SysEx)
+    decoded = tuning.decode(message)
     assert decoded is not None and isinstance(decoded.message, tuning.BulkDump)
     assert decoded.message.program == 0
     assert decoded.message.table.values[71] == tuning.Pitch(semitone=76, fraction=320)
@@ -108,7 +111,9 @@ def test_complete_bulk_export_is_transfer_ready_and_refuses_overwrite(
     )
     plan = list(file_io.Reader(destination))
     assert len(plan) == 1
-    decoded = tuning.decode(plan[0])
+    message = plan[0]
+    assert isinstance(message, messages.SysEx)
+    decoded = tuning.decode(message)
     assert decoded is not None and decoded.checksum == tuning.ChecksumStatus.Matches
     assert isinstance(decoded.message, tuning.BulkDump) and decoded.message.bank == bank
     before = destination.read_bytes()
@@ -146,7 +151,9 @@ def test_partial_export_preserves_missing_keys_and_never_hides_invalid_pitches(
     report = json.loads(capsys.readouterr().out)
     assert report["converted_keys"] == 2 and report["preserved_keys"] == 126
     reader = file_io.Reader(destination)
-    decoded = tuning.decode(next(reader))
+    message = next(reader)
+    assert isinstance(message, messages.SysEx)
+    decoded = tuning.decode(message)
     reader.close()
     assert decoded is not None and isinstance(decoded.message, tuning.BulkDump)
     assert (

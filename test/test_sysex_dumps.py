@@ -351,7 +351,9 @@ def test_byte_limits_apply_before_retention(
     receiver = Input(clock)
     receiver.scheduled = [messages.SysEx(b"\x04\x01").replace(stream="s")]
     report = sysex.dump_sysex(
-        cast(midi.Input, receiver), model="moog/subsequent-37", **limits
+        cast(midi.Input, receiver),
+        model="moog/subsequent-37",
+        **limits,  # ty: ignore[invalid-argument-type]
     )
     assert (
         report.status == "limit_reached"

@@ -176,7 +176,8 @@ def main() -> None:
         assert router.snapshot().admitted == 1
         tracker = topology.Tracker()
         assert tracker.observe([]).generation == 1
-        assert list(file_io.Reader(BytesIO(b"\xf0\x7d\xf7")))[0].data == b"\x7d"
+        message = list(file_io.Reader(BytesIO(b"\xf0\x7d\xf7")))[0]
+        assert isinstance(message, messages.SysEx) and message.data == b"\x7d"
         assert list(events.with_gap(iter(["item"]), 0.1)) == ["item", 0.1]
         from middy import discovery
 

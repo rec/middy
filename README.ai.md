@@ -986,9 +986,14 @@ not initialize this runtime. This is not recovery from a crashed/restarted MIDI 
 explicit isolation permits replacing the affected child, while in-process use
 may require restarting the application. Observer disposal failures remain open.
 
-Release CI remains triggered only by a published release, testing Python 3.13
-on Linux, macOS arm64/Intel and Windows. It includes native regression
-checks, Rust/Python checks, source/wheel builds and installed-package tests.
+CI can run on a pull request to main or on demand before a release. The
+published-release trigger runs the same matrix. It tests Python 3.13 on Linux,
+macOS arm64/Intel and Windows, and Python 3.14 on Linux. It includes native
+regressions, Rust and Python checks, wheel builds and installed-package tests.
+Candidate wheel tests use the locked dependencies. Before publishing, run the
+workflow with `check_index` enabled to test wheel installation against public
+dependency releases in a separate environment. Published-release runs also
+perform that check.
 Configured jobs are not evidence of a passing release run.
 
 Local Rust development and tests use the current installed toolchain. Do not

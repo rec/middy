@@ -35,8 +35,9 @@ def test_grouped_messages_require_explicit_byte_address_removal() -> None:
 
 
 def test_writer_retains_grouped_logical_values_and_native_midi2() -> None:
+    sysex = messages.SysEx(bytes(range(20)), group=3)
     values = [
-        messages.SysEx(bytes(range(20)), group=3),
+        sysex,
         messages.ControlChange(7, 10000, 2, resolution=14, group=3),
         messages.PerNotePitchBend(group=3, channel=2, note=60, value=-(2**31)),
         ump.SysEx7Packet(group=3, format=1, data=b"abc"),
@@ -50,7 +51,7 @@ def test_writer_retains_grouped_logical_values_and_native_midi2() -> None:
         restored = [v for v in reader if isinstance(v, messages.Message)]
     assert restored == values
     assert [type(v) for v in restored] == [type(v) for v in values]
-    assert len(ump.packetize_sysex7(values[0])) == 4
+    assert len(ump.packetize_sysex7(sysex)) == 4
 
 
 def test_one_ump_handoff_preserves_compound_values_and_complete_sysex() -> None:

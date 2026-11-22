@@ -1,6 +1,14 @@
 name: CI
 
-on:
+"on":
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      check_index:
+        description: Check a fresh wheel install against public dependency releases
+        type: boolean
+        default: false
   release:
     types: [published]
 
@@ -68,6 +76,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-14, macos-15-intel, windows-2022]
         python: ['3.13']
+        include:
+          - os: ubuntu-24.04
+            python: '3.14'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
@@ -94,7 +105,7 @@ jobs:
           rustup default 1.87.0
       - name: Install package and CLI
         run: |
-          uv sync --frozen --python '${{ matrix.python }}' --extra cli
+          uv sync --frozen --no-editable --python '${{ matrix.python }}' --extra cli
       - name: Rust checks and linked tests
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
@@ -143,9 +154,11 @@ jobs:
           else
             wheel_python="$RUNNER_TEMP/middy-wheel/bin/python"
           fi
-          uv pip install --python "$wheel_python" dist/*.whl pytest
+          uv pip install --python "$wheel_python" --no-deps dist/*.whl
           uv export --frozen --extra cli --no-emit-project --no-dev --no-hashes --output-file target/wheel-optional-requirements.txt
           uv pip install --python "$wheel_python" --no-deps -r target/wheel-optional-requirements.txt
+          uv pip install --python "$wheel_python" pytest
+          uv pip check --python "$wheel_python"
           cd "$RUNNER_TEMP"
           "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test/test_contract.py" "$GITHUB_WORKSPACE/test/test_packets.py" "$GITHUB_WORKSPACE/test/test_isolation.py" "$GITHUB_WORKSPACE/test/test_messages.py" "$GITHUB_WORKSPACE/test/test_codecs.py" "$GITHUB_WORKSPACE/test/test_controls.py" "$GITHUB_WORKSPACE/test/test_tuning.py" "$GITHUB_WORKSPACE/test/test_profiles.py" "$GITHUB_WORKSPACE/test/test_profile_engines.py" "$GITHUB_WORKSPACE/test/test_ump.py" "$GITHUB_WORKSPACE/test/test_files.py" "$GITHUB_WORKSPACE/test/test_archive.py" "$GITHUB_WORKSPACE/test/test_live.py" "$GITHUB_WORKSPACE/test/test_file_timing.py" "$GITHUB_WORKSPACE/test/test_event_views.py" "$GITHUB_WORKSPACE/test/test_ci.py" "$GITHUB_WORKSPACE/test/test_ufor_tuning.py"
           "$wheel_python" -m pytest \
@@ -164,10 +177,19 @@ jobs:
             "$GITHUB_WORKSPACE/test/test_ci_browser.py" \
             "$GITHUB_WORKSPACE/test/test_testing.py" \
             "$GITHUB_WORKSPACE/test/test_metrics.py" \
+            "$GITHUB_WORKSPACE/test/test_output.py" \
             "$GITHUB_WORKSPACE/test/test_capture_cli.py" \
             "$GITHUB_WORKSPACE/test/test_tuning_query.py" \
             "$GITHUB_WORKSPACE/test/test_tuning_cli.py" \
             "$GITHUB_WORKSPACE/test/test_ufor_cli.py"
+      - name: Check wheel installation with only published dependencies
+        if: runner.os == 'Linux' && (github.event_name == 'release' || inputs.check_index)
+        run: |
+          uv venv "$RUNNER_TEMP/middy-index" --python '${{ matrix.python }}'
+          index_python="$RUNNER_TEMP/middy-index/bin/python"
+          uv pip install --python "$index_python" --index-url https://pypi.org/simple dist/*.whl pytest
+          cd "$RUNNER_TEMP"
+          "$index_python" -m pytest "$GITHUB_WORKSPACE/test/test_ufor_tuning.py"
       - run: uv run --no-sync pytest test/release/artifacts.py -v
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

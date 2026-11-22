@@ -26,11 +26,11 @@ def open_connections() -> tuple[midi.Input[ReceivedPacket], midi.Output]:
     target = midi.Output(run_in_subprocess=run_in_subprocess)
     (port,) = (p for p in target.ports() if token in p.name)
     outgoing = target.connect(port)
-    outgoing(b"\x90\x3c\x7f")
+    outgoing.send(b"\x90\x3c\x7f")
     if not started.wait(5):
         raise RuntimeError("native callback did not start")
     for _ in range(100):
-        outgoing(b"\x90\x3d\x01")
+        outgoing.send(b"\x90\x3d\x01")
     # This handler runs before the extension's earlier cleanup handler.
     atexit.register(release.set)
     return incoming, outgoing

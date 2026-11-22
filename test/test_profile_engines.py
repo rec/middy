@@ -164,6 +164,7 @@ def test_mpe_tracker_keeps_overlap_and_sustain_separate_from_member_expression()
     for n in (60, 64, 60):
         tracker.feed(messages.NoteOn(channel=2, note=n, velocity=100))
     state = tracker.feed(messages.PitchBend(channel=2, value=300))[0].value
+    assert isinstance(state, mpe.ChannelState)
     assert state.ambiguous and state.pitch_bend == 300
     assert [(n.note, n.held) for n in state.notes] == [(60, 2), (64, 1)]
     tracker.feed(messages.ControlChange(channel=1, controller=64, value=127))
@@ -181,9 +182,8 @@ def test_mpe_tracker_keeps_overlap_and_sustain_separate_from_member_expression()
     assert state.pitch_bend is state.pressure is state.timbre is state.sustain is None
     tracker.configure(zone=mpe.ZoneConfiguration(manager_channel=16, members=1))
     assert tracker.feed(messages.NoteOn(channel=2, note=60, velocity=100)) == []
-    assert tracker.feed(messages.NoteOn(channel=15, note=60, velocity=100))[
-        0
-    ].value.notes
+    member = tracker.feed(messages.NoteOn(channel=15, note=60, velocity=100))[0].value
+    assert isinstance(member, mpe.ChannelState) and member.notes
     tracker.feed(messages.SystemReset())
     assert tracker.snapshot(channel=15).notes == []
 
@@ -213,10 +213,9 @@ def test_mtc_lock_requires_continuity_and_expires_at_the_deadline() -> None:
         assert result.observation.locked == (frame == 2)
     assert assembler.locked
     assert assembler.poll(now_ns=114) == []
-    assert (
-        assembler.poll(now_ns=115)[0].value.diagnostic
-        == timecode.AssemblyDiagnostic.Timeout
-    )
+    timed_out = assembler.poll(now_ns=115)[0].value
+    assert isinstance(timed_out, timecode.AssemblyResult)
+    assert timed_out.diagnostic == timecode.AssemblyDiagnostic.Timeout
     assert not assembler.locked
     with pytest.raises(ValueError):
         assembler.poll(now_ns=114)

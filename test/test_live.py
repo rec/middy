@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Iterator
 from io import BytesIO
 from pathlib import Path
 from threading import Thread
-from typing import Self
+from typing import Self, cast
 
 import pytest
 from pydantic import PrivateAttr
@@ -153,7 +153,7 @@ def test_playback_cancellation_and_partial_failure_do_not_send_cleanup() -> None
             [event(0), event(0), event(0)],
             origin=events.Timestamp(ticks=0, clock=clock()),
         )
-    assert error.value.completed_events == 1 and len(sink._sent) == 1
+    assert vars(error.value)["completed_events"] == 1 and len(sink._sent) == 1
     assert isinstance(error.value, midi.SendError)
     cancel = events.Cancellation()
     cancel.cancel()
@@ -503,7 +503,9 @@ def iterable_input(
 
     class Client:
         def __init__(self, **settings: object) -> None:
-            self.encoding = settings["encoding"]
+            encoding = settings["encoding"]
+            assert isinstance(encoding, midi.Encoding)
+            self.encoding = encoding
 
         def listen_all(
             self,
@@ -778,9 +780,11 @@ def test_syx_write_selects_messages_from_input_recording(
             "100 ms",
         ]
         assert reader.complete
-    empty = tmp_path / "no-sysex.syx"
-    file_io.write(midi.Input(run_in_subprocess=False).record(0), empty)
-    assert empty.read_bytes() == b""
+    with pytest.raises(OSError, match="no SysEx messages"):
+        file_io.write(
+            midi.Input(run_in_subprocess=False).record(0), path, overwrite=True
+        )
+    assert path.read_bytes() == b"\xf0\x7d\x01\xf7\xf0\x7d\x02\xf7"
 
 
 def test_record_returns_memory_capture_and_file_round_trip(
@@ -879,8 +883,13 @@ def test_closed_input_releases_native_handles_but_retains_final_diagnostics(
     original_connect = native_type.connect
     handles: list[weakref.ReferenceType[object]] = []
 
-    def connect(client: _native.Input, *args: object) -> object:
-        connection = original_connect(client, *args)
+    def connect(
+        client: _native.Input,
+        port: midi.Port,
+        callback: Callable[[events.ReceivedPacket], object],
+        clock_identity: str,
+    ) -> _native.InputConnection:
+        connection = original_connect(client, port, callback, clock_identity)
         handles.extend([weakref.ref(client), weakref.ref(connection)])
         return connection
 
@@ -931,7 +940,7 @@ def test_stopping_recording_can_be_retried_after_timeout_and_input_close(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    original = archive.Recorder
+    original = cast(Callable[..., archive.Recorder], archive.Recorder)
 
     class Recorder:
         def __init__(self, destination: Path, **settings: object) -> None:
@@ -939,7 +948,7 @@ def test_stopping_recording_can_be_retried_after_timeout_and_input_close(
             self.attempts = 0
 
         def record(self, value: object) -> bool:
-            return self.inner.record(value)
+            return cast(Callable[[object], bool], self.inner.record)(value)
 
         def fail(self, reason: str) -> None:
             self.inner.fail(reason)

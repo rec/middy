@@ -128,7 +128,8 @@ def test_transpose_loop_preserves_header_tracks_tempo_and_fragments(
     destination = tmp_path / "song-up.mid"
     with md.Writer(destination) as writer:
         for m in md.Reader(source):
-            if getattr(m, "channel", 10) != 10:
+            assert isinstance(m, (md.smf.Header, md.smf.Event))
+            if isinstance(m, md.smf.Event) and getattr(m, "channel", 10) != 10:
                 m = m.transpose(12)
             writer.write(m)
     with md.Reader(destination) as reader:
@@ -229,7 +230,8 @@ def test_syx_writer_accepts_structured_messages_and_reader_detects_short_streams
     with md.Reader(BytesIO(expected)) as reader:
         result = list(reader)
         assert reader.complete and reader.problem is None
-    assert [md.codecs.encode(m) for m in result] == [
+    assert all(isinstance(m, md.SysEx) for m in result)
+    assert [md.codecs.encode(m) for m in result if isinstance(m, md.SysEx)] == [
         md.codecs.encode(request),
         b"\xf0\xf7",
     ]

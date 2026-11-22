@@ -85,7 +85,7 @@ def test_playback_metrics_are_opt_in_and_cover_only_successful_handoffs() -> Non
     assert sum(report.lateness.buckets) == report.sent_events
     with pytest.raises(midi.SendError) as result:
         Sink(fail=True).send([event(), event()], origin=origin, metrics=True)
-    retained = result.value.report
+    retained = vars(result.value)["report"]
     assert retained.sent_events == 1 and retained.lateness is not None
     assert retained.lateness.count == 1
     cancel = events.Cancellation()

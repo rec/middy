@@ -3,6 +3,7 @@
 import inspect
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -28,7 +29,12 @@ def profile_vectors() -> Iterator[tuple[object, bytes]]:
         fields, wire = line.split("|")
         name, *numbers = fields.split()
         if name in {"Gm1On", "Gm2On", "GmOff"}:
-            mode = {"Gm1On": "gm1", "Gm2On": "gm2", "GmOff": "off"}[name]
+            modes: dict[str, Literal["gm1", "gm2", "off"]] = {
+                "Gm1On": "gm1",
+                "Gm2On": "gm2",
+                "GmOff": "off",
+            }
+            mode = modes[name]
             yield gm.GmMode(mode, device_id=int(numbers[0])), bytes.fromhex(wire)
             continue
         constructor = getattr(modules[name], name)
@@ -179,10 +185,10 @@ def test_gm_lookup_tables_are_complete_independent_copies_without_bank_guesses()
         gm.program(program=True)
     for version in (0, 3):
         with pytest.raises(ValueError):
-            gm.programs(version=version)
+            gm.programs(version=version)  # ty: ignore[invalid-argument-type]
     for version in (True, "2"):
         with pytest.raises(TypeError):
-            gm.programs(version=version)
+            gm.programs(version=version)  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError):
         gm.program(program=1, bank_lsb=128)
 

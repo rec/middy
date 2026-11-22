@@ -216,8 +216,12 @@ def test_live_monitor_reports_loss_and_typed_entries_without_owning_connection()
             cancel.cancel()
 
     report = inspection.run(
-        monitor, source, callback=accept, cancel=cancel, metrics=True
-    )  # ty: ignore[invalid-argument-type]
+        monitor,
+        source,  # ty: ignore[invalid-argument-type]
+        callback=accept,
+        cancel=cancel,
+        metrics=True,
+    )
     assert report.interrupted and report.transport_drops == 2
     assert entries[0].kind == "loss_counter" and entries[0].transport_drop_total == 2
     assert entries[-1].message == messages.NoteOn(60, channel=1)

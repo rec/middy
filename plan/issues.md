@@ -22,19 +22,16 @@ budget and decide how to expose capacity or rotate long recordings.
 
 ## Release, privacy, and remaining qualification
 
-- **P2. Published releases are the first automated cross-platform gate.**
-  The workflow triggers on a published release and tests CPython 3.13,
-  while package metadata admits later versions. The wheel install first
-  resolves dependencies from the index, then installs the exported lock
-  dependencies. The repository obtains uFor from a pinned Git revision but
-  the wheel declares unversioned `ufor`. Before publication, verify that
-  an ordinary wheel install resolves a compatible uFor without the
-  repository lock, run the wheel matrix on a candidate, and include
-  `test_output.py` in the installed-wheel subset. The current workflow
-  builds and uploads artifacts, so it leaves publication policy to the
-  owner. ([Workflow trigger](../.github/workflows/ci.yml#L3),
-  [wheel install and test list](../.github/workflows/ci.yml#L138),
-  [package metadata](../pyproject.toml#L5),
+- **P2. Verify a release candidate and its public dependency contract.**
+  Candidate CI supports pull requests and manual runs, checks installed
+  playback, and separates locked development dependencies from a fresh
+  index-only install. The macOS candidate wheel passed its locked-dependency
+  smoke tests. The index-only install chose uFor 0.1.0, which rejected the
+  current `FrequencyTable(frequencies=...)` API. A compatible published
+  dependency and a passing `check_index` run are still required before public
+  distribution. Hosted verification is pending.
+  ([Workflow](../.github/workflows/ci.yml),
+  [tuning integration](../middy/tuning.py),
   [development source](../pyproject.toml#L43))
 - **Native resource and lifetime evidence remains open.** Failed in-process
   disposal deliberately retains state and consumes one of the 32 native

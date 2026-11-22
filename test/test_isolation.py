@@ -23,7 +23,6 @@ from unittest.mock import patch
 import pytest
 
 from middy import _native, events, messages, midi, mpe, set_scan_interval
-from middy._clients import Input, Output
 from middy._native import CallbackBridge
 from middy._transport import ReceiveQueue
 from middy.events import Clock, ReceivedPacket
@@ -520,17 +519,16 @@ def test_connection_is_the_resource_and_close_is_terminal(
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
 def test_invalid_deadlines_are_rejected_before_starting_a_worker(
-    timeout: float, workers: None
+    timeout: float,
 ) -> None:
     with pytest.raises(ValueError, match="timeout"):
         output_client("invalid", timeout=timeout)
-    assert not workers
 
 
 def input_client(mode: str, **settings: object) -> midi.Input[events.ReceivedPacket]:
     """Discover while the child fixture's selected mode is in the environment."""
     with patch.dict(os.environ, {"MIDDY_TEST_MODE": mode}):
-        client = cast(Callable[..., Input[events.ReceivedPacket]], midi.Input)(
+        client = cast("Callable[..., midi.Input[events.ReceivedPacket]]", midi.Input)(
             **(
                 {
                     "raw": True,
@@ -549,7 +547,7 @@ def input_client(mode: str, **settings: object) -> midi.Input[events.ReceivedPac
 def output_client(mode: str, **settings: object) -> midi.Output:
     """Discover while the child fixture's selected mode is in the environment."""
     with patch.dict(os.environ, {"MIDDY_TEST_MODE": mode}):
-        client = cast(Callable[..., Output], midi.Output)(
+        client = cast(Callable[..., midi.Output], midi.Output)(
             **(
                 {
                     "run_in_subprocess": True,
@@ -799,6 +797,7 @@ def test_default_input_tracks_hotplug_duplicate_names_and_new_connection_identit
         reconnected = receive()
         if isinstance(first, messages.Message):
             assert isinstance(reconnected, messages.Message)
+            assert isinstance(second, messages.Message)
             assert reconnected.port is not None and first.port is not None
             assert reconnected.port.identity != first.port.identity
             source.stop()
@@ -1136,7 +1135,7 @@ def test_broadcast_failure_preserves_device_and_command_progress_and_cleans_othe
     error = caught.value
     assert [p.name for p in error.completed_ports] == ["Good"]
     assert error.failed_port.name == "Fail" and error.total_ports == 3
-    assert error.completed_events == 0
+    assert vars(error)["completed_events"] == 0
     assert isinstance(output.worker_failure, midi.BroadcastSendError)
     if compound:
         assert isinstance(error.__cause__, midi.CompoundSendError)
@@ -1544,11 +1543,13 @@ def test_subprocess_preserves_negative_and_missing_timestamps(
 def test_subprocess_clients_leaving_scope_remain_collectible(
     input_mode: bool, connected: bool, workers: None
 ) -> None:
-    source = input_client("quiet") if input_mode else output_client("healthy")
-    if connected:
-        if input_mode:
+    if input_mode:
+        source = input_client("quiet")
+        if connected:
             source.connect(source.ports()[0], lambda packet: None)
-        else:
+    else:
+        source = output_client("healthy")
+        if connected:
             source.connect(source.ports()[0])
     reference = weakref.ref(source)
     del source
@@ -1586,7 +1587,7 @@ def test_expired_or_foreign_port_snapshots_fail_terminally_before_remote_open(
     ],
 )
 def test_worker_preserves_bytes_and_strided_buffers(
-    payload: object, workers: None
+    payload: bytes | bytearray | memoryview, workers: None
 ) -> None:
     source = output_client("check_bytes")
     with source.connect(source.ports()[0]):

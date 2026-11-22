@@ -862,7 +862,7 @@ def test_send_rejects_mixed_timing_and_retains_confirmed_progress(
         with pytest.raises(ValueError, match="mix") as caught:
             output.send(source)
         if timed_first:
-            assert caught.value.report.sent_events == 1
+            assert vars(caught.value)["report"].sent_events == 1
             assert transport.packets() == [b"\x90\x3c\x5a"]
         else:
             assert transport.packets() == []
@@ -895,8 +895,8 @@ def test_send_failure_keeps_original_type_and_report(
     output = midi.Output()
     with pytest.raises(midi.SendError) as caught:
         output.send(messages.Note(0, 60))
-    assert caught.value.report.sent_events == 1
-    assert caught.value.completed_events == 1
+    assert vars(caught.value)["report"].sent_events == 1
+    assert vars(caught.value)["completed_events"] == 1
     transport.fail_release = False
     output.close()
 

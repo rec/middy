@@ -12,7 +12,8 @@ from typing import BinaryIO, Literal
 from . import archive, clip, events, messages, smf
 
 def write(
-    records: Iterable[
+    records: Reader
+    | Iterable[
         events.Clock
         | archive.Stream
         | messages.Message

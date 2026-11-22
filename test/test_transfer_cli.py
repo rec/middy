@@ -27,12 +27,12 @@ class Connection:
 
     def send(self, values: Iterator[messages.SysEx | float]) -> SimpleNamespace:
         for v in values:
-            if isinstance(v, float):
+            if isinstance(v, (int, float)):
                 continue
             self.sent.append(codecs.encode(v))
             if self.fail and len(self.sent) == 2:
                 error = midi.SendError("uncertain send")
-                error.completed_events = 1
+                vars(error)["completed_events"] = 1
                 raise error
         return SimpleNamespace(sent_events=len(self.sent), cancelled=False)
 
