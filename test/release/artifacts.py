@@ -109,6 +109,7 @@ def test_wheels_include_typed_api_and_matching_version_metadata() -> None:
             assert set(metadata.get_all("Provides-Extra", [])) == {"cli"}
             ufor = next(r for r in requirements if r.name == "ufor")
             assert ufor.marker is None
+            assert str(ufor.specifier) == ">=0.2.0"
             for python in ["3.11", "3.13", "3.15"]:
                 environment = {
                     "extra": "",

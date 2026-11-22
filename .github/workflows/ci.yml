@@ -6,7 +6,7 @@ name: CI
   workflow_dispatch:
     inputs:
       check_index:
-        description: Check a fresh wheel install against public dependency releases
+        description: Check a fresh install using only published dependency wheels
         type: boolean
         default: false
   release:
@@ -167,14 +167,20 @@ jobs:
           "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test" \
             --ignore="$GITHUB_WORKSPACE/test/test_public_symbols.py" \
             --ignore="$GITHUB_WORKSPACE/test/test_callbacks.py"
-      - name: Check wheel installation with only published dependencies
-        if: runner.os == 'Linux' && (github.event_name == 'release' || inputs.check_index)
+      - name: Check installation with only published dependency wheels
+        if: github.event_name == 'release' || inputs.check_index
         run: |
           uv venv "$RUNNER_TEMP/middy-index" --python '${{ matrix.python }}'
-          index_python="$RUNNER_TEMP/middy-index/bin/python"
-          uv pip install --python "$index_python" --index-url https://pypi.org/simple dist/*.whl pytest
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            index_python="$RUNNER_TEMP/middy-index/Scripts/python.exe"
+          else
+            index_python="$RUNNER_TEMP/middy-index/bin/python"
+          fi
+          uv pip install --python "$index_python" --only-binary :all: --index-url https://pypi.org/simple dist/*.whl pytest
+          uv pip check --python "$index_python"
           cd "$RUNNER_TEMP"
-          "$index_python" -m pytest "$GITHUB_WORKSPACE/test/test_ufor_tuning.py"
+          "$index_python" -m pytest "$GITHUB_WORKSPACE/test/test_ufor_tuning.py" \
+            "$GITHUB_WORKSPACE/test/test_isolation.py::test_python_bootstrap_runs_the_rust_worker_without_native_initialization"
       - run: uv run --no-sync pytest test/release/artifacts.py -v
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

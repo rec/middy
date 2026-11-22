@@ -30,6 +30,13 @@ complex and complicated things should be possible, but simple things should be e
 The [Python](doc/examples.md) and [Rust](doc/rust-examples.md) examples say more.
 (NB: these documents are also changing fast as of 2026/11/12.)
 
+## Python installation
+
+Once middy and its dependencies are on PyPI, install the wheels with
+`python -m pip install --only-binary=:all: middy`. This requires a compatible
+wheel for your Python version and platform. Python users can install these
+wheels without a Rust compiler. See the [release qualification plan](plan/qualification.md#release-acceptance-and-withdrawal).
+
 ## Why?
 
 I've been writing digital audio and music programs since the late 1970s.

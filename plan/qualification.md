@@ -136,8 +136,9 @@ dependencies and also builds a source distribution. For source distribution
 qualification, install the wheel built from the unpacked source archive.
 
 Use the uFor commit pinned in `uv.lock` for checkout installs and candidate
-CI. The PyPI release is deferred until a compatible uFor version is available
-from PyPI and the candidate passes the index-only installation check.
+CI. Publish middy wheels once a compatible uFor wheel (0.2.0 or newer) is
+available from PyPI and the candidate passes `check_index` on every matrix
+target. The check installs middy and all dependencies from wheels.
 
 If a released platform fails, pause distribution, identify affected filenames
 and environments in the release notes, and mark the release as affected. If
