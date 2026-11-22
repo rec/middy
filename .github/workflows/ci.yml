@@ -120,7 +120,7 @@ jobs:
       - name: Python tests
         run: |
           set +e
-          uv run --no-sync pytest > target/pytest.log 2>&1
+          uv run --no-sync pytest --ignore=test/test_public_symbols.py > target/pytest.log 2>&1
           test_status=$?
           set -e
           cat target/pytest.log
@@ -132,11 +132,13 @@ jobs:
             printf '::error title=Python tests::%s\n' "$report"
           fi
           exit "$test_status"
+      - name: Public symbol inventory tests
+        run: uv run --no-sync python -m pytest test/test_public_symbols.py
       - run: uv run --no-sync ruff check --select B,E,F,I middy test
       - run: uv run --no-sync ruff format --check middy test
       - name: Type check the selected Python surface
         run: uv run --no-sync ty check --python-version '${{ matrix.python }}' middy test
-      - name: Build wheel from sdist
+      - name: Build wheel and source distribution
         uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
         with:
           maturin-version: 'v1.15.0'

@@ -1,15 +1,22 @@
 #include "../include_catch.hpp"
 #include <libremidi/backends/winmm/helpers.hpp>
 
+#include <bit>
 #include <future>
 
 namespace
 {
 MMRESULT close_status = MMSYSERR_NOERROR;
 int closes{};
+using input_callback = void(CALLBACK*)(HMIDIIN, UINT, DWORD_PTR, DWORD_PTR, DWORD_PTR);
+input_callback registered_callback{};
+DWORD_PTR registered_instance{};
 
-MMRESULT WINAPI fake_open(LPHMIDIIN out, UINT, DWORD_PTR, DWORD_PTR, DWORD)
+MMRESULT WINAPI fake_open(
+    LPHMIDIIN out, UINT, DWORD_PTR callback, DWORD_PTR instance, DWORD)
 {
+  registered_callback = std::bit_cast<input_callback>(callback);
+  registered_instance = instance;
   *out = reinterpret_cast<HMIDIIN>(1);
   return MMSYSERR_NOERROR;
 }
@@ -86,8 +93,7 @@ TEST_CASE("WinMM retains callback resources after device close until draining", 
       }}, libremidi::winmm_input_configuration{}};
   REQUIRE(input.do_open(0) == stdx::error{});
   std::thread callback{[&] {
-    input.midiInputCallback(nullptr, MIM_DATA, reinterpret_cast<DWORD_PTR>(&input),
-                            0x00643C90, 1);
+    registered_callback(nullptr, MIM_DATA, registered_instance, 0x00643C90, 1);
   }};
   entered.get_future().wait();
   const auto first = input.close_port();
@@ -115,8 +121,7 @@ TEST_CASE("WinMM rejects callback self-close before native disposal", "[winmm]")
       }}, libremidi::winmm_input_configuration{}};
   input_ptr = &input;
   REQUIRE(input.do_open(0) == stdx::error{});
-  input.midiInputCallback(nullptr, MIM_DATA, reinterpret_cast<DWORD_PTR>(&input),
-                          0x00643C90, 1);
+  registered_callback(nullptr, MIM_DATA, registered_instance, 0x00643C90, 1);
   REQUIRE(callback_result != stdx::error{});
   REQUIRE(closes == 0);
   REQUIRE(input.close_port() == stdx::error{});
