@@ -8,9 +8,17 @@ use middy_coremidi_fixture::{
 };
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc, Arc,
+    mpsc, Arc, Mutex, MutexGuard,
 };
 use std::time::Duration;
+
+fn enable_fixture() -> MutexGuard<'static, ()> {
+    // Tests share the fake endpoint registry and native client capacity.
+    static FIXTURE: Mutex<()> = Mutex::new(());
+    let guard = FIXTURE.lock().unwrap_or_else(|error| error.into_inner());
+    enable();
+    guard
+}
 
 #[test]
 fn unopened_diagnostics_survive_close_without_opening_native_clients() {
@@ -32,7 +40,7 @@ fn unopened_diagnostics_survive_close_without_opening_native_clients() {
 #[test]
 fn high_level_raw_input_preserves_fragments_and_reports_queue_loss() {
     use middy::{events::InputItem, midi};
-    enable();
+    let _fixture = enable_fixture();
     for encoding in [Encoding::Bytes, Encoding::Ump] {
         let name = format!("raw-input-{encoding:?}");
         let mut input = midi::Input::new()
@@ -108,7 +116,7 @@ fn high_level_raw_input_preserves_fragments_and_reports_queue_loss() {
 #[test]
 fn high_level_callbacks_are_serial_guard_blocking_io_and_drain_on_close() {
     use middy::{events::InputItem, midi};
-    enable();
+    let _fixture = enable_fixture();
     let (sender, receiver) = mpsc::channel();
     let mut count = 0;
     let mut input = midi::Input::new()
@@ -154,7 +162,7 @@ fn high_level_callbacks_are_serial_guard_blocking_io_and_drain_on_close() {
 #[test]
 fn attached_recording_with_callbacks_retains_activity_and_marks_panics_incomplete() {
     use middy::{archive, events::InputItem, midi};
-    enable();
+    let _fixture = enable_fixture();
     for panic in [false, true] {
         let name = format!("callback-recording-{panic}");
         let path = std::env::temp_dir().join(format!(
@@ -225,7 +233,7 @@ fn attached_recording_with_callbacks_retains_activity_and_marks_panics_incomplet
 #[test]
 fn high_level_raw_callback_panics_stop_delivery_and_remain_observable() {
     use middy::{events::InputItem, midi};
-    enable();
+    let _fixture = enable_fixture();
     let (sender, receiver) = mpsc::channel();
     let mut input = midi::Input::new()
         .raw()
@@ -274,7 +282,7 @@ fn high_level_raw_callback_panics_stop_delivery_and_remain_observable() {
 #[test]
 fn high_level_callbacks_report_native_loss_during_silence_and_close_failure() {
     use middy::{events::InputItem, midi};
-    enable();
+    let _fixture = enable_fixture();
     let (sender, receiver) = mpsc::channel();
     let mut input = midi::Input::new()
         .raw()
@@ -337,7 +345,7 @@ fn high_level_callbacks_report_native_loss_during_silence_and_close_failure() {
 #[test]
 fn high_level_virtual_ports_preserve_messages_and_terminal_close() {
     use middy::{events::InputItem, messages::Message, midi};
-    enable();
+    let _fixture = enable_fixture();
     for encoding in [Encoding::Bytes, Encoding::Ump] {
         for virtual_input in [true, false] {
             let name = format!("Clavier é 🎹-{encoding:?}-{virtual_input}");
@@ -418,7 +426,7 @@ fn high_level_virtual_ports_preserve_messages_and_terminal_close() {
 
 #[test]
 fn failed_discovery_returns_no_snapshot_and_allows_explicit_rediscovery() {
-    enable();
+    let _fixture = enable_fixture();
     for encoding in [Encoding::Bytes, Encoding::Ump] {
         let name = format!("discovery-recovery-{encoding:?}");
         let input = Input::new(InputOptions {
@@ -455,7 +463,7 @@ fn failed_discovery_returns_no_snapshot_and_allows_explicit_rediscovery() {
 
 #[test]
 fn compound_send_stops_at_each_failed_boundary_and_reports_known_progress() {
-    enable();
+    let _fixture = enable_fixture();
     for command in [
         middy::messages::AnyCommand::ParameterSet(
             middy::messages::ParameterSet::new(1234, 10000)
@@ -510,7 +518,7 @@ fn compound_send_stops_at_each_failed_boundary_and_reports_known_progress() {
 #[test]
 fn simultaneous_raw_and_compound_sends_do_not_interleave_command_messages() {
     use std::sync::{Barrier, Mutex};
-    enable();
+    let _fixture = enable_fixture();
     let received = Arc::new(Mutex::new(Vec::new()));
     let capture = Arc::clone(&received);
     let name = "compound-serialization";
@@ -595,7 +603,7 @@ fn simultaneous_raw_and_compound_sends_do_not_interleave_command_messages() {
 
 #[test]
 fn ffi_round_trip_preserves_bytes_ump_clocks_and_client_ownership() {
-    enable();
+    let _fixture = enable_fixture();
     for (encoding, packet) in [
         (Encoding::Bytes, Packet::Bytes(vec![0x90, 60, 100])),
         (Encoding::Ump, Packet::Ump(vec![0x40903c00, 0xc0000000])),
@@ -653,7 +661,7 @@ fn ffi_round_trip_preserves_bytes_ump_clocks_and_client_ownership() {
 
 #[test]
 fn ffi_input_connect_and_virtual_output_use_cloned_source_metadata() {
-    enable();
+    let _fixture = enable_fixture();
     for encoding in [Encoding::Bytes, Encoding::Ump] {
         let options = InputOptions {
             encoding,
@@ -700,7 +708,7 @@ fn ffi_input_connect_and_virtual_output_use_cloned_source_metadata() {
 
 #[test]
 fn failed_input_disposal_retains_callback_context_and_suppresses_delivery() {
-    enable();
+    let _fixture = enable_fixture();
     let dropped = Arc::new(AtomicBool::new(false));
     struct Probe(Arc<AtomicBool>);
     impl Drop for Probe {
@@ -738,7 +746,7 @@ fn failed_input_disposal_retains_callback_context_and_suppresses_delivery() {
 #[test]
 #[ignore = "requires a fresh process with all 32 native client slots available"]
 fn repeated_failed_disposals_each_retain_one_endpoint_and_client_slot() {
-    enable();
+    let _fixture = enable_fixture();
     let observer = Output::new(OutputOptions::default()).unwrap();
     let mut retained = Vec::new();
     for i in 0..3 {
@@ -771,7 +779,7 @@ fn repeated_failed_disposals_each_retain_one_endpoint_and_client_slot() {
 
 #[test]
 fn ump_send_reports_an_accepted_prefix_and_does_not_retry_after_failure() {
-    enable();
+    let _fixture = enable_fixture();
     let options = InputOptions {
         encoding: Encoding::Ump,
         ..InputOptions::default()
@@ -821,7 +829,7 @@ fn ump_send_reports_an_accepted_prefix_and_does_not_retry_after_failure() {
 
 #[test]
 fn failed_output_disposal_retains_the_endpoint() {
-    enable();
+    let _fixture = enable_fixture();
     let name = "fixture-retained-output";
     let output = Output::new(OutputOptions::default())
         .unwrap()
@@ -842,7 +850,7 @@ fn failed_output_disposal_retains_the_endpoint() {
 
 #[test]
 fn refreshed_and_foreign_discovery_snapshots_cannot_open_a_connection() {
-    enable();
+    let _fixture = enable_fixture();
     let name = "fixture-stale-port";
     let input = Input::new(InputOptions::default())
         .unwrap()

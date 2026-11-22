@@ -117,8 +117,9 @@ jobs:
           fi
           cargo fmt --all --check
           cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --exclude middy-python
           # Embedded Python tests share interpreter and tracing state.
-          cargo test --locked --workspace -- --test-threads=1
+          cargo test --locked -p middy-python -- --test-threads=1
       - name: Python tests
         run: |
           set +e
@@ -135,7 +136,7 @@ jobs:
           fi
           exit "$test_status"
       - name: Public symbol inventory tests
-        run: uv run --no-sync python -m pytest test/test_public_symbols.py
+        run: uv run --no-sync python -m pytest -n 0 test/test_public_symbols.py
       - run: uv run --no-sync ruff check --select B,E,F,I middy test
       - run: uv run --no-sync ruff format --check middy test
       - name: Type check the selected Python surface
@@ -161,7 +162,7 @@ jobs:
           uv pip install --python "$wheel_python" --no-deps dist/*.whl
           uv export --frozen --extra cli --no-emit-project --no-dev --no-hashes --output-file target/wheel-optional-requirements.txt
           uv pip install --python "$wheel_python" --no-deps -r target/wheel-optional-requirements.txt
-          uv pip install --python "$wheel_python" pytest
+          uv pip install --python "$wheel_python" pytest pytest-xdist
           uv pip check --python "$wheel_python"
           cd "$RUNNER_TEMP"
           "$wheel_python" -m pytest "$GITHUB_WORKSPACE/test" \
@@ -179,9 +180,9 @@ jobs:
           uv pip install --python "$index_python" --only-binary :all: --index-url https://pypi.org/simple dist/*.whl pytest
           uv pip check --python "$index_python"
           cd "$RUNNER_TEMP"
-          "$index_python" -m pytest "$GITHUB_WORKSPACE/test/test_ufor_tuning.py" \
+          "$index_python" -m pytest -o addopts= "$GITHUB_WORKSPACE/test/test_ufor_tuning.py" \
             "$GITHUB_WORKSPACE/test/test_isolation.py::test_python_bootstrap_runs_the_rust_worker_without_native_initialization"
-      - run: uv run --no-sync pytest test/release/artifacts.py -v
+      - run: uv run --no-sync pytest -n 0 test/release/artifacts.py -v
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: middy-${{ matrix.os }}-cp${{ matrix.python }}

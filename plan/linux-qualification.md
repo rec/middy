@@ -101,7 +101,7 @@ timeout --kill-after=10s 30m cargo test --locked --workspace -- --test-threads=1
 timeout --kill-after=10s 30m uv run --frozen --no-sync pytest -q
 timeout --kill-after=10s 30m cargo build --locked --release -p middy --examples
 timeout --kill-after=10s 5m target/release/examples/qualification > "$qualification_run/rust.jsonl"
-timeout --kill-after=10s 5m uv run --frozen --no-sync pytest -q -s test/qualification/measure.py -k 'not native' --junitxml="$qualification_run/python313.xml" > "$qualification_run/python313.log" 2>&1
+timeout --kill-after=10s 5m uv run --frozen --no-sync pytest -q -s -n 0 test/qualification/measure.py -k 'not native' --junitxml="$qualification_run/python313.xml" > "$qualification_run/python313.log" 2>&1
 ```
 
 Capture build/test stdout, stderr and each exit code in the evidence directory.
@@ -124,7 +124,7 @@ After sequencer access and creation of test-owned virtual endpoints are approved
 start with the existing supervised MIDI 1 cases:
 
 ```bash
-timeout --kill-after=10s 5m uv run --frozen --no-sync pytest -q -s test/qualification/measure.py -k 'native and (in_process or isolated or rust or typed or sysex)' --junitxml="$qualification_run/native-midi1.xml" > "$qualification_run/native-midi1.log" 2>&1
+timeout --kill-after=10s 5m uv run --frozen --no-sync pytest -q -s -n 0 test/qualification/measure.py -k 'native and (in_process or isolated or rust or typed or sysex)' --junitxml="$qualification_run/native-midi1.xml" > "$qualification_run/native-midi1.log" 2>&1
 ```
 
 Each native child already has a 30-second deadline. The Rust example must exist;

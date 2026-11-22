@@ -35,6 +35,7 @@ middy = "middy.cli:main"
 dev = [
     "maturin==1.15.0",
     "pytest>=8",
+    "pytest-xdist>=3.8.0",
     "pyupgrade>=3.19",
     "ruff>=0.11",
     "ty>=0.0.1",
@@ -67,6 +68,7 @@ cache-keys = [
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
+addopts = "-n auto --maxprocesses=4"
 
 [tool.ruff]
 target-version = "py313"

@@ -69,7 +69,7 @@ For an authorized device-free baseline:
 uv sync --frozen --no-editable --python 3.13 --all-extras
 cargo build --locked --release -p middy --examples
 target/release/examples/qualification
-uv run --no-sync pytest -q -s test/qualification/measure.py -k 'not native'
+uv run --no-sync pytest -q -s -n 0 test/qualification/measure.py -k 'not native'
 ```
 
 Record first-run costs and build profiles. Debug-versus-release measurements

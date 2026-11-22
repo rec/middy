@@ -1015,15 +1015,20 @@ hosts, with no separate project milestone or required model. The
 inventory, device-free builds, authorized software loopback and physical tests.
 
 ```sh
-uv run --frozen pytest
+uv run --frozen pytest --ignore=test/test_public_symbols.py
+uv run --frozen python -m pytest -n 0 test/test_public_symbols.py
 uv run --frozen ruff check --select B,E,F,I middy test
 uv run --frozen ruff format --check middy test
 uv run --frozen ty check middy test
 cargo fmt --all --check
+cargo test --locked --workspace --exclude middy-python
 PYO3_PYTHON="$PWD/.venv/bin/python" PYTHONPATH="$PWD/.venv/lib/python3.13/site-packages" \
-  cargo test --locked --workspace -- --test-threads=1
+  cargo test --locked -p middy-python -- --test-threads=1
 uv run maturin build --release --locked --sdist --out dist
 ```
+
+Pytest runs with up to four workers. Use `-n 0` for direct output or serial
+diagnostics. The embedded Python tests share interpreter state and run serially.
 
 Use the site-packages directory matching the installed Python version. On
 Windows set `PYO3_PYTHON` to `.venv/Scripts/python.exe` and `PYTHONPATH` to
