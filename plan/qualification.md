@@ -24,7 +24,7 @@ See the staged [Linux procedure](linux-qualification.md) and
 [open issues](issues.md). Compilation and device-free tests do not establish
 native runtime or physical-device behavior.
 
-The [candidate run for `a6c6018`](https://github.com/rec/middy/actions/runs/45017112560)
+The [candidate run for `cc3df4d`](https://github.com/rec/middy/actions/runs/45019531170)
 passed device-free native and installed-wheel testing on Linux, both macOS
 architectures and Windows. It included WinMM teardown and ANSI/Unicode
 discovery regressions and CPython 3.14 on Linux. It used the locked dependencies.

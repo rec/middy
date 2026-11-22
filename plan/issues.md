@@ -32,7 +32,7 @@ reason so archive recovery can report the cause alongside the verified prefix.
   checks. The index-only install chose uFor 0.1.0, which rejected the current
   `FrequencyTable(frequencies=...)` API. Public distribution still requires
   a passing `check_index` run.
-  ([Candidate run](https://github.com/rec/middy/actions/runs/45017112560),
+  ([Candidate run](https://github.com/rec/middy/actions/runs/45019531170),
   [Workflow](../.github/workflows/ci.yml),
   [tuning integration](../middy/tuning.py),
   [development source](../pyproject.toml#L43))
