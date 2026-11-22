@@ -5,7 +5,9 @@ from __future__ import annotations
 import gc
 import weakref
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from time import monotonic
 
 import pytest
@@ -32,6 +34,7 @@ class NativeConnection:
         self.fail_release = False
         self.partial: int | None = None
         self.group_state: _native.OutputState | None = None
+        self.before_open: Callable[[], None] | None = None
 
     def send(self, packet: bytes) -> None:
         if self.fail_release and packet[0] & 0xF0 == 0x80:
@@ -82,14 +85,79 @@ def transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[NativeConnection]:
             ]
 
         def connect(self, port: midi.Port) -> NativeConnection:
+            if connection.before_open is not None:
+                connection.before_open()
             return connection
 
         def connect_matching(self, patterns: list[str]) -> NativeConnection:
             connection.group_state = _native.OutputState()
-            return connection
+            return self.connect(self.ports()[0])
+
+        def create_virtual(self, name: str) -> NativeConnection:
+            return self.connect(self.ports()[0])
 
     monkeypatch.setattr(_native, "Output", Client)
     yield connection
+
+
+@pytest.mark.parametrize("operation", ["connect", "connect_matching", "create_virtual"])
+def test_close_retires_output_opened_concurrently(
+    transport: NativeConnection, operation: str
+) -> None:
+    opening = Event()
+    release = Event()
+    closing = Event()
+    output = midi.Output(port="FLOW 8" if operation == "connect_matching" else None)
+
+    def wait_in_open() -> None:
+        opening.set()
+        assert release.wait(5)
+
+    def close_output() -> None:
+        closing.set()
+        output.close()
+
+    transport.before_open = wait_in_open
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        if operation == "create_virtual":
+            opened = pool.submit(output.create_virtual, "test")
+        else:
+            opened = pool.submit(output.connect)
+        try:
+            assert opening.wait(5)
+            closed = pool.submit(close_output)
+            assert closing.wait(5)
+            assert not closed.done()
+        finally:
+            release.set()
+        assert opened.result(timeout=5) is output
+        closed.result(timeout=5)
+    assert output.closed
+    assert transport.closed
+
+
+def test_concurrent_send_cannot_interleave_with_an_active_playback(
+    transport: NativeConnection,
+) -> None:
+    preparing = Event()
+    release = Event()
+
+    def source() -> Iterator[messages.NoteOn]:
+        preparing.set()
+        assert release.wait(5)
+        yield messages.NoteOn(60)
+
+    with midi.Output() as output, ThreadPoolExecutor(max_workers=1) as pool:
+        sending = pool.submit(output.send, source())
+        try:
+            assert preparing.wait(5)
+            with pytest.raises(midi.StateError, match="already sending"):
+                output.send(messages.NoteOn(64))
+        finally:
+            release.set()
+        assert sending.result(timeout=5).sent_events == 1
+        assert output.send(messages.NoteOff(60)).sent_events == 1
+    assert transport.packets() == [b"\x90\x3c\x5a", b"\x80\x3c\x00"]
 
 
 def test_output_channel_overrides_messages_and_tracks_cleanup(

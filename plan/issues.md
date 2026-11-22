@@ -37,34 +37,6 @@ that application's pitch response.
 [output cleanup](../crates/middy/src/output.rs#L833),
 [Python cancellation](../src/playback.rs#L182))
 
-### P1. Python close can race with output connection publication
-
-`Output.connect()` checks the Python client's state and publishes
-`_connection` only after a native open that releases the GIL. Meanwhile,
-`close()` can set `_closed`, observe no connection, and return. The opener can
-then publish a live native connection on the closed client. Subsequent
-`close()` calls short-circuit on `_closed`. Test with a barrier in native
-open, covering both explicit connect and the lazy connect in `send()`. Make
-ownership of the opening connection explicit across the operation, including
-retirement when close wins. Review virtual creation against the same rule.
-([Python connect](../middy/_clients.py#L506),
-[Python close](../middy/_clients.py#L737),
-[native open](../src/output.rs#L304))
-
-### P1. Concurrent Python sends can reuse the same MPE channels
-
-Each `send()` creates its own timeline and channel assignment. Playback
-releases the GIL while waiting, and the native connection protects individual
-sends. Two threads sharing one Python output can start separate expressive
-chords, both using channel 2, or disable the zone while the other chord is
-still active. Ordinary messages can also target those channels during the
-wait. Define whether concurrent sends on one output are supported and enforce
-the chosen rule for the whole playback operation. A fake clock can pause one
-call after its first attack while a second call attempts to send.
-([Python send](../middy/_clients.py#L540),
-[playback wait](../src/playback.rs#L182),
-[channel allocation](../crates/middy/src/sequence.rs#L211))
-
 ### P1. A stuck native call can block discovery, close, and retirement
 
 In-process worker startup and command replies use unbounded waits. The catalog

@@ -810,6 +810,10 @@ rejected while connected. `close()` is terminal and returns `None`; create a new
 object to reconnect. Context managers close too. Body and close failures are preserved together in a
 `BaseExceptionGroup`. `closed` is a momentary ownership snapshot, not device
 health or a reservation against another thread closing it.
+Python output close waits for an in-progress open to finish and retires the
+resulting connection. A second `send()` on the same Python output raises
+`StateError` while a send is active. Rust requires exclusive mutable access to
+the output for the whole send.
 
 Every failed open that enters the Rust transport invalidates the client,
 including stale/foreign snapshots. Ordinary Python argument validation happens

@@ -442,6 +442,7 @@ class Output(_Client, frozen=True):
     _native_client: _native.Output | None = PrivateAttr(default=None)
     _connection: _OutputState | None = PrivateAttr(default=None)
     _beat_period: Fraction | None = PrivateAttr(default=None)
+    _send_lock: LockType = PrivateAttr(default_factory=Lock)
 
     @field_validator("bpm", mode="before")
     @classmethod
@@ -464,13 +465,10 @@ class Output(_Client, frozen=True):
             "backend": self.backend,
         }
 
-    def _initialize(self) -> None:
-        _native.check_thread()
-        with self._initialization:
-            if self._closed:
-                raise midi.StateError("client is closed")
-            if self._native_client is not None:
-                return
+    def _client_locked(self) -> _native.Output:
+        if self._closed or self._connection is not None:
+            raise midi.StateError("output is closed or already connected")
+        if self._native_client is None:
             settings: dict[str, object] = dict(self._settings)
             if self.run_in_subprocess:
                 settings.update(
@@ -486,13 +484,12 @@ class Output(_Client, frozen=True):
                     worker_timeout=self.timeout,
                 )
             self._native_client = _native.Output(**settings)
+        return self._native_client
 
     def ports(self) -> list[midi.Port]:
-        if self._closed or self._connection is not None:
-            raise midi.StateError("client is connected or closed")
-        self._initialize()
-        assert self._native_client is not None
-        return self._native_client.ports()
+        _native.check_thread()
+        with self._initialization:
+            return self._client_locked().ports()
 
     @property
     def worker_failure(self) -> Exception | None:
@@ -505,36 +502,36 @@ class Output(_Client, frozen=True):
 
     def connect(self, port: midi.Port | None = None) -> Output:
         _native.check_thread()
-        if self._closed or self._connection is not None:
-            raise midi.StateError("output is closed or already connected")
         if port is not None and not isinstance(port, midi.Port):
             raise TypeError("port must be a discovery snapshot")
-        self._initialize()
+        with self._initialization:
+            self._connect_locked(port)
+        return self
+
+    def _connect_locked(self, port: midi.Port | None) -> None:
+        client = self._client_locked()
         connection = _OutputState._create(self)
-        assert self._native_client is not None
         if port is None and self.port is not None:
-            connection._native = self._native_client.connect_matching(
+            connection._native = client.connect_matching(
                 [self.port] if isinstance(self.port, str) else self.port
             )
             connection._state = None
         else:
             if port is None:
-                port = _native.select_port(self.ports(), None, "output")
-            connection._native = self._native_client.connect(port)
+                port = _native.select_port(client.ports(), None, "output")
+            connection._native = client.connect(port)
         connection._closed = False
         self._connection = connection
-        return self
 
     def create_virtual(self, name: str) -> Output:
-        if self._closed or self._connection is not None:
-            raise midi.StateError("output is closed or already connected")
+        _native.check_thread()
         validate_open(name)
-        self._initialize()
-        connection = _OutputState._create(self)
-        assert self._native_client is not None
-        connection._native = self._native_client.create_virtual(name)
-        connection._closed = False
-        self._connection = connection
+        with self._initialization:
+            client = self._client_locked()
+            connection = _OutputState._create(self)
+            connection._native = client.create_virtual(name)
+            connection._closed = False
+            self._connection = connection
         return self
 
     def send(
@@ -559,10 +556,12 @@ class Output(_Client, frozen=True):
         allow_rounding: bool = False,
         metrics: bool = False,
     ) -> events.PlaybackReport:
-        """Send values in sequence, preserving timing within recorded sources."""
+        """Send values in sequence. Another send on this output raises StateError."""
         _native.check_thread()
         if self._closed:
             raise midi.StateError("output is closed")
+        if not self._send_lock.acquire(blocking=False):
+            raise midi.StateError("output is already sending")
         try:
             timeline = self._timeline(values, origin, mappings, allow_rounding)
             if cancel is None or not cancel.cancelled:
@@ -578,14 +577,18 @@ class Output(_Client, frozen=True):
                 metrics=metrics,
             )
         finally:
-            for v in values:
-                if isinstance(v, archive.Reader):
-                    v.close()
+            try:
+                for v in values:
+                    if isinstance(v, archive.Reader):
+                        v.close()
+            finally:
+                self._send_lock.release()
 
     def _send(self, value: object) -> None:
-        self.__enter__()
-        assert self._connection is not None
-        self._connection._send(value)
+        with self._initialization:
+            self._open_locked()
+            assert self._connection is not None
+            self._connection._send(value)
 
     def _timeline(
         self,
@@ -712,11 +715,16 @@ class Output(_Client, frozen=True):
         return timeline, elapsed
 
     def __enter__(self) -> Output:
+        _native.check_thread()
+        with self._initialization:
+            self._open_locked()
+        return self
+
+    def _open_locked(self) -> None:
         if self._closed:
             raise midi.StateError("output is closed")
         if self._connection is None:
-            self.connect()
-        return self
+            self._connect_locked(None)
 
     def __exit__(
         self,
