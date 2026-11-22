@@ -7,7 +7,7 @@ A graded series of examples.
 ```python
 import middy as md
 
-md.Output().send(md.Note('500 ms', 60))
+md.Output().send(md.Note('500 ms', 60))  # 0.5 also works
 ```
 
 ## 2. Play a tune in 120 bpm
@@ -180,8 +180,9 @@ SYSEX_WAIT = '100 ms'
 # a few milliseconds to a second and conceivably more.
 # Check your manual!
 
-with md.Reader('backup.syx') as reader:
-    md.Output().send(md.events.with_gap(reader, SYSEX_WAIT))
+md.Output().send(
+    md.with_gap(md.Reader('backup.syx'), SYSEX_WAIT)
+)
 ```
 
 ### Request or capture an opaque instrument dump
