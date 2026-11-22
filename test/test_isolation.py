@@ -823,7 +823,7 @@ def output_topology(
 ) -> tuple[Path, Path]:
     topology = tmp_path / "output-ports"
     log = tmp_path / "output-log"
-    topology.write_text("Synth A\nSynth B\nOther\n")
+    topology.write_text("Synth A\nSynth B\nOther\n", newline="\n")
     log.write_text("")
     log.with_suffix(".scans").write_text("")
     monkeypatch.setenv("MIDDY_TEST_MODE", "broadcast")
@@ -835,7 +835,7 @@ def output_topology(
 
 def write_ports(topology: Path, names: str) -> None:
     pending = topology.with_suffix(".pending")
-    pending.write_text(names)
+    pending.write_text(names, newline="\n")
     pending.replace(topology)
 
 
