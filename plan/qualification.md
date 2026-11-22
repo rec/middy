@@ -14,15 +14,20 @@ qualify current revisions, physical instruments or other platforms.
 | Scope | Remaining evidence |
 | --- | --- |
 | macOS CoreMIDI MIDI 1 and UMP | Other versions/architectures, physical interoperability, faults and deployment resource behavior |
-| Windows WinMM | Native regressions, ANSI/Unicode discovery tests, installed wheels and an agreed loopback route |
+| Windows WinMM | An agreed loopback route and runtime checks on the target host |
 | Windows MIDI Services | SDK/build integration and native UMP qualification; currently disabled |
-| Linux ALSA sequencer/raw and available UMP variants | Native build/tests, installed wheels and separately authorized runtime checks |
+| Linux ALSA sequencer/raw and available UMP variants | Separately authorized runtime checks |
 | Resources | Parent/child memory and CPU, thread/handle counts, sustained load and overload behavior against agreed application budgets |
 | Release | Archive-format freeze, future compatibility promises and publication remain owner decisions |
 
 See the staged [Linux procedure](linux-qualification.md) and
 [open issues](issues.md). Compilation and device-free tests do not establish
 native runtime or physical-device behavior.
+
+The [candidate run for `a6c6018`](https://github.com/rec/middy/actions/runs/45017112560)
+passed device-free native and installed-wheel testing on Linux, both macOS
+architectures and Windows. It included WinMM teardown and ANSI/Unicode
+discovery regressions and CPython 3.14 on Linux. It used the locked dependencies.
 
 ## Setup and toolchain policy
 
@@ -123,11 +128,18 @@ authorizes no runtime test, installation, publication or hardware operation.
 For each candidate, build a wheel from the source archive, run the installed
 wheel checks outside the checkout, and run `pytest test/release/artifacts.py`
 against the files in `dist/`. Record the commit, filenames and results.
-The platform matrix runs when a GitHub release is published. If a platform
-fails, pause distribution, identify affected filenames and environments in
-the release notes, and mark the release as affected. If those files reached
-a package index, yank the affected version there. Publish a corrected version
-after verifying the failing case and the replacement artifacts.
+The platform matrix runs on pull requests to `main`, on manual dispatch, and
+when a GitHub release is published. Use manual dispatch for the candidate
+commit, with `check_index` enabled to test the published dependency contract.
+Candidate CI tests the wheel in a separate environment with the locked runtime
+dependencies and also builds a source distribution. For source distribution
+qualification, install the wheel built from the unpacked source archive.
+
+If a released platform fails, pause distribution, identify affected filenames
+and environments in the release notes, and mark the release as affected. If
+those files reached a package index, yank the affected version there. Publish
+a corrected version after verifying the failing case and the replacement
+artifacts.
 
 When refreshing libremidi, reconcile each patch in the source manifest with the
 new pin, update the notices, and run its listed backend regressions on each

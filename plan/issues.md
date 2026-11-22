@@ -25,12 +25,13 @@ budget and decide how to expose capacity or rotate long recordings.
 - **P2. Verify a release candidate and its public dependency contract.**
   Candidate CI supports pull requests and manual runs, checks installed
   playback, and separates locked development dependencies from a fresh
-  index-only install. The macOS candidate wheel passed its locked-dependency
-  smoke tests. The index-only install chose uFor 0.1.0, which rejected the
-  current `FrequencyTable(frequencies=...)` API. A compatible published
-  dependency and a passing `check_index` run are still required before public
-  distribution. Hosted verification is pending.
-  ([Workflow](../.github/workflows/ci.yml),
+  index-only install. All nine hosted candidate jobs passed. A macOS wheel
+  built from the unpacked source distribution also passed the distribution
+  checks. The index-only install chose uFor 0.1.0, which rejected the current
+  `FrequencyTable(frequencies=...)` API. Public distribution still requires
+  a passing `check_index` run.
+  ([Candidate run](https://github.com/rec/middy/actions/runs/45017112560),
+  [Workflow](../.github/workflows/ci.yml),
   [tuning integration](../middy/tuning.py),
   [development source](../pyproject.toml#L43))
 - **Native resource and lifetime evidence remains open.** Failed in-process
