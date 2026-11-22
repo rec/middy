@@ -169,6 +169,15 @@ enum Action {
     Bend(i64),
 }
 
+pub(crate) fn check_event_limit(notes: &[Note], mut remaining: usize) -> io::Result<()> {
+    for note in notes {
+        remaining = remaining
+            .checked_sub(note.bends.len().saturating_add(2))
+            .ok_or_else(|| invalid("untimed playback exceeds the sequence limit"))?;
+    }
+    Ok(())
+}
+
 /// Shared authored-note planner for the Rust and Python output APIs.
 #[doc(hidden)]
 pub fn schedule_notes(

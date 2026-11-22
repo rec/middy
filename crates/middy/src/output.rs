@@ -42,6 +42,7 @@ pub struct Output {
     port: Option<Vec<String>>,
     channel: Option<u8>,
     bpm: Option<Rational>,
+    sequence_limit: usize,
     playback: PlaybackOptions,
     client: Option<transport::Output>,
     connection: Option<Connection>,
@@ -49,6 +50,8 @@ pub struct Output {
     state: OutputState,
     closed: bool,
 }
+
+pub const DEFAULT_SEQUENCE_LIMIT: usize = 65_536;
 
 /// One element of a heterogeneous output sequence. `From` conversions allow
 /// notes, rests, messages, packets, Duration and Beats to be passed directly.
@@ -201,6 +204,7 @@ impl Output {
             port: None,
             channel: None,
             bpm: None,
+            sequence_limit: DEFAULT_SEQUENCE_LIMIT,
             playback: PlaybackOptions::default(),
             client: None,
             connection: None,
@@ -212,6 +216,14 @@ impl Output {
     pub fn with_playback(mut self, options: PlaybackOptions) -> Self {
         self.playback = options;
         self
+    }
+    /// Limit input items and scheduled events per untimed batch.
+    pub fn with_sequence_limit(mut self, limit: usize) -> crate::midi::Result<Self> {
+        if limit == 0 {
+            return Err(invalid("sequence limit must be positive").into());
+        }
+        self.sequence_limit = limit;
+        Ok(self)
     }
     pub fn with_channel(mut self, channel: i64) -> crate::midi::Result<Self> {
         if !(1..=16).contains(&channel) {
@@ -333,18 +345,42 @@ impl Output {
             if self.closed {
                 return Err(Cause::Input(invalid("output is closed")));
             }
-            for (timestamps, segment) in source.into_output() {
+            for (timestamps, mut segment) in source.into_output() {
                 if self.playback.cancel.cancelled() {
                     report.cancelled = true;
                     break;
                 }
-                let mut values = segment.filter_map(|v| match v {
-                    Ok(OutputValue::Record(record)) => {
-                        replay_message(Ok(record)).map(|v| v.map(OutputValue::Message))
+                let cancel = self.playback.cancel.clone();
+                let limit = self.sequence_limit;
+                let mut skipped = 0;
+                let mut values = std::iter::from_fn(|| {
+                    while !cancel.cancelled() {
+                        let next = segment.next()?;
+                        if cancel.cancelled() {
+                            return None;
+                        }
+                        let value = match next {
+                            Ok(OutputValue::Record(record)) => {
+                                replay_message(Ok(record)).map(|v| v.map(OutputValue::Message))
+                            }
+                            value => Some(value),
+                        };
+                        if let Some(value) = value {
+                            skipped = 0;
+                            return Some(value);
+                        }
+                        skipped += 1;
+                        if skipped > limit {
+                            return Some(Err(sequence_limit_error()));
+                        }
                     }
-                    v => Some(v),
+                    None
                 });
                 let Some(first) = values.next() else {
+                    if cancel.cancelled() {
+                        report.cancelled = true;
+                        break;
+                    }
                     continue;
                 };
                 let first = first.map_err(Cause::Input)?;
@@ -404,21 +440,25 @@ impl Output {
                             break;
                         }
                     }
+                    report.cancelled |= cancel.cancelled();
                     elapsed = elapsed.checked_add(duration).map_err(Cause::Input)?;
                 } else {
-                    let mut ordinary = vec![first];
-                    for value in values {
-                        let value = value.map_err(Cause::Input)?;
+                    let ordinary = std::iter::once(Ok(first)).chain(values).map(|value| {
+                        let value = value?;
                         if timestamps
                             && matches!(&value, OutputValue::Message(m) if m.timestamp().is_some())
                         {
-                            return Err(Cause::Input(invalid(
+                            return Err(invalid(
                                 "cannot mix timestamped and untimestamped values within one source",
-                            )));
+                            ));
                         }
-                        ordinary.push(value);
-                    }
+                        Ok(value)
+                    });
                     let plan = self.prepare(ordinary, &mut elapsed).map_err(Cause::Input)?;
+                    if cancel.cancelled() {
+                        report.cancelled = true;
+                        break;
+                    }
                     if plan.iter().any(|(_, p, _)| p.is_some()) {
                         self.open().map_err(|e| Cause::Send(e.into()))?;
                     }
@@ -540,7 +580,7 @@ impl Output {
     }
     fn prepare(
         &self,
-        values: impl IntoIterator<Item = OutputValue>,
+        values: impl IntoIterator<Item = io::Result<OutputValue>>,
         elapsed: &mut Rational,
     ) -> io::Result<Vec<(u64, Option<Prepared>, bool)>> {
         if self.closed {
@@ -550,10 +590,13 @@ impl Output {
             ));
         }
         let mut plan = Vec::new();
-        for value in values {
+        for (index, value) in values.into_iter().enumerate() {
+            if index >= self.sequence_limit {
+                return Err(sequence_limit_error());
+            }
             let start = nanoseconds(*elapsed)?;
             let rounded = elapsed.multiply(1_000_000_000, 1)?.denominator() != 1;
-            match value {
+            match value? {
                 OutputValue::Record(_) => {
                     return Err(invalid("archive record requires source normalization"))
                 }
@@ -578,6 +621,9 @@ impl Output {
                     plan.push((start, Some(Prepared::Packet(packet)), rounded));
                 }
             }
+            if plan.len() > self.sequence_limit {
+                return Err(sequence_limit_error());
+            }
         }
         plan.push((nanoseconds(*elapsed)?, None, false));
         Ok(plan)
@@ -588,6 +634,8 @@ impl Output {
         elapsed: &mut Rational,
         plan: &mut Vec<(u64, Option<Prepared>, bool)>,
     ) -> io::Result<()> {
+        let remaining = self.sequence_limit - plan.len();
+        crate::sequence::check_event_limit(notes, remaining)?;
         let (events, duration) = crate::sequence::schedule_notes(notes, self.bpm, self.channel)?;
         for (offset, message) in events {
             let at = elapsed.checked_add(offset)?;
@@ -722,6 +770,9 @@ impl Output {
             }
         }
     }
+}
+fn sequence_limit_error() -> io::Error {
+    invalid("untimed playback exceeds the sequence limit")
 }
 impl Drop for Output {
     fn drop(&mut self) {
@@ -1514,6 +1565,46 @@ mod tests {
             ]
         );
         assert_eq!(fixture.packets(), bytes(&[b"\x90\x3c\x5a"]));
+    }
+
+    #[test]
+    fn untimed_preflight_bounds_iterators_and_honors_cancellation() {
+        use crate::playback::Cause;
+        let mut fixture = Fixture::new();
+        fixture.output = fixture.output.with_sequence_limit(2).unwrap();
+        let note = messages::NoteOn::new(60).unwrap();
+        let failure = fixture
+            .output
+            .send(std::iter::repeat(note.clone()))
+            .unwrap_err();
+        assert!(
+            matches!(failure.cause, Cause::Input(e) if e.to_string().contains("sequence limit"))
+        );
+        let chord = Chord::new([
+            Note::new(Duration::ZERO, 60).unwrap(),
+            Note::new(Duration::ZERO, 64).unwrap(),
+        ]);
+        let failure = fixture.output.send(chord).unwrap_err();
+        assert!(
+            matches!(failure.cause, Cause::Input(e) if e.to_string().contains("sequence limit"))
+        );
+        let cancel = fixture.output.playback.cancel.clone();
+        let report = fixture
+            .output
+            .send(
+                [note.clone(), note]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, note)| {
+                        if i == 1 {
+                            cancel.cancel();
+                        }
+                        note
+                    }),
+            )
+            .unwrap();
+        assert!(report.cancelled && report.sent_events == 0);
+        assert!(fixture.packets().is_empty());
     }
 
     #[test]

@@ -193,6 +193,10 @@ fn populate_midi(module: &Bound<'_, PyModule>) -> PyResult<()> {
     native.add_class::<output::Output>()?;
     native.add_class::<output::OutputConnection>()?;
     native.add_class::<output::OutputState>()?;
+    native.add(
+        "DEFAULT_SEQUENCE_LIMIT",
+        middy::midi::DEFAULT_SEQUENCE_LIMIT,
+    )?;
     native.add_function(wrap_pyfunction!(ports::select_port, &native)?)?;
     module.add_class::<ports::Port>()?;
     module.add_function(wrap_pyfunction!(ports::set_scan_interval, module)?)?;

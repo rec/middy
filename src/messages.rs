@@ -1361,6 +1361,7 @@ pub(crate) fn schedule_notes(
     value: &Bound<'_, PyAny>,
     beat_period: &Bound<'_, PyAny>,
     channel: Option<u8>,
+    limit: usize,
 ) -> PyResult<AuthoredPlan> {
     use middy::events::Rational;
     let py = value.py();
@@ -1373,7 +1374,11 @@ pub(crate) fn schedule_notes(
             Rational::new(n, d).map_err(|error| PyValueError::new_err(error.to_string()))?;
         messages::Beats::try_from(rational).map_err(value_error)
     };
-    let resolve_note = |note: PyRef<'_, Note>| -> PyResult<messages::Note> {
+    let mut remaining = limit;
+    let mut resolve_note = |note: PyRef<'_, Note>| -> PyResult<messages::Note> {
+        remaining = remaining
+            .checked_sub(note.bends.len().saturating_add(2))
+            .ok_or_else(|| PyValueError::new_err("untimed playback exceeds the sequence limit"))?;
         let mut resolved = messages::Note::new(resolve(&note.duration)?, note.note(py))
             .and_then(|v| v.with_velocity(note.velocity(py)))
             .map_err(value_error)?
@@ -1401,6 +1406,11 @@ pub(crate) fn schedule_notes(
     // At 60 BPM, these already-resolved beat magnitudes are seconds.
     let (events, duration) = messages::schedule_notes(&notes, Some(60.into()), channel)
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    if events.len() > limit {
+        return Err(PyValueError::new_err(
+            "untimed playback exceeds the sequence limit",
+        ));
+    }
     let parts = |v: Rational| (v.numerator(), v.denominator());
     let events = events
         .into_iter()

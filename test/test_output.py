@@ -6,6 +6,7 @@ import gc
 import weakref
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from itertools import repeat
 from pathlib import Path
 from threading import Event
 from time import monotonic
@@ -158,6 +159,37 @@ def test_concurrent_send_cannot_interleave_with_an_active_playback(
         assert sending.result(timeout=5).sent_events == 1
         assert output.send(messages.NoteOff(60)).sent_events == 1
     assert transport.packets() == [b"\x90\x3c\x5a", b"\x80\x3c\x00"]
+
+
+def test_untimed_preflight_limits_iterables_and_generated_events(
+    transport: NativeConnection,
+) -> None:
+    output = midi.Output(sequence_limit=2)
+    with pytest.raises(ValueError, match="sequence limit"):
+        output.send(repeat(messages.NoteOn(60)))
+    with pytest.raises(ValueError, match="sequence limit"):
+        output.send(Chord(Note(0, 60), Note(0, 64)))
+    assert transport.packets() == []
+    assert output.send(Note(0, 60)).sent_events == 2
+    output.close()
+
+
+def test_cancellation_during_preflight_sends_nothing(
+    transport: NativeConnection,
+) -> None:
+    cancel = events.Cancellation()
+
+    def source() -> Iterator[messages.NoteOn]:
+        yield messages.NoteOn(60)
+        cancel.cancel()
+        yield messages.NoteOn(64)
+        pytest.fail("playback consumed another item after cancellation")
+
+    output = midi.Output()
+    report = output.send(source(), cancel=cancel)
+    assert report.cancelled and report.sent_events == 0
+    assert transport.packets() == []
+    output.close()
 
 
 def test_output_channel_overrides_messages_and_tracks_cleanup(

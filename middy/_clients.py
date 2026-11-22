@@ -438,6 +438,9 @@ class Output(_Client, frozen=True):
 
     channel: _Channel | None = None
     bpm: int | float | None = Field(default=None, gt=0)
+    sequence_limit: int = Field(
+        default=_native.DEFAULT_SEQUENCE_LIMIT, strict=True, gt=0
+    )
 
     _native_client: _native.Output | None = PrivateAttr(default=None)
     _connection: _OutputState | None = PrivateAttr(default=None)
@@ -563,7 +566,7 @@ class Output(_Client, frozen=True):
         if not self._send_lock.acquire(blocking=False):
             raise midi.StateError("output is already sending")
         try:
-            timeline = self._timeline(values, origin, mappings, allow_rounding)
+            timeline = self._timeline(values, origin, mappings, allow_rounding, cancel)
             if cancel is None or not cancel.cancelled:
                 first = next(timeline, None)
                 if first is not None:
@@ -596,10 +599,13 @@ class Output(_Client, frozen=True):
         origin: events.Timestamp | None,
         mappings: list[events.ClockMapping] | tuple[events.ClockMapping, ...] | None,
         allow_rounding: bool,
+        cancel: events.Cancellation | None,
     ) -> Iterator[tuple[int, object, bool]]:
         elapsed = Fraction(0)
         pending: list[object] = []
         for v in values:
+            if cancel is not None and cancel.cancelled:
+                return
             if isinstance(
                 v,
                 (
@@ -617,6 +623,8 @@ class Output(_Client, frozen=True):
                 ),
             ):
                 pending.append(v)
+                if len(pending) > self.sequence_limit:
+                    raise ValueError("untimed playback exceeds the sequence limit")
                 continue
             if pending:
                 plan, elapsed = self._prepare_sequence(pending, elapsed)
@@ -626,9 +634,16 @@ class Output(_Client, frozen=True):
             mode: bool | None = None
             planner: events.PlaybackPlan | None = None
             ordinary: list[object] = []
+            skipped = 0
             for m in cast(Iterable[object], v):
+                if cancel is not None and cancel.cancelled:
+                    return
                 if isinstance(m, (events.Clock, archive.Stream, archive.Metadata)):
+                    skipped += 1
+                    if skipped > self.sequence_limit:
+                        raise ValueError("playback source exceeds the sequence limit")
                     continue
+                skipped = 0
                 timed = isinstance(m, messages.Message) and m.timestamp is not None
                 if mode is None:
                     mode = timed
@@ -671,6 +686,8 @@ class Output(_Client, frozen=True):
                             "an explicit send policy"
                         )
                     ordinary.append(m)
+                    if len(ordinary) > self.sequence_limit:
+                        raise ValueError("untimed playback exceeds the sequence limit")
             if ordinary:
                 plan, elapsed = self._prepare_sequence(ordinary, elapsed)
                 yield from plan
@@ -687,7 +704,10 @@ class Output(_Client, frozen=True):
             rounded = (elapsed * 1_000_000_000).denominator != 1
             if isinstance(v, (messages.Note, messages.Chord)):
                 planned, duration = _native.schedule_notes(
-                    v, self._beat_period, self.channel
+                    v,
+                    self._beat_period,
+                    self.channel,
+                    self.sequence_limit - len(timeline),
                 )
                 for offset, message in planned:
                     at_ns = (elapsed + Fraction(*offset)) * 1_000_000_000
@@ -711,6 +731,8 @@ class Output(_Client, frozen=True):
                 )
             if round(elapsed * 1_000_000_000) > 2**64 - 1:
                 raise ValueError("delay exceeds scheduler range")
+            if len(timeline) > self.sequence_limit:
+                raise ValueError("untimed playback exceeds the sequence limit")
         timeline.append((round(elapsed * 1_000_000_000), None, False))
         return timeline, elapsed
 

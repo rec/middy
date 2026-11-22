@@ -53,18 +53,15 @@ requires explicit handling to avoid transmitting a note or command twice.
 [sticky failure](../crates/middy/src/output_group.rs#L158),
 [public hot-plug contract](../doc/examples.md#L64))
 
-### P2. Untimed playback can exhaust memory or wait forever before sending
+### P2. Large packets can exceed memory budgets during untimed preflight
 
-Both APIs collect an entire untimed iterable, then allocate a prepared plan.
-An infinite iterator sends nothing, and a large one retains both source values
-and prepared packets at peak. Cancellation is checked outside collection, so
-even a fast infinite generator can keep the caller busy after cancellation.
-Preserve the existing preflight guarantee for finite batches and define a
-bounded admission or explicitly streaming contract for longer input. Include
-cancellation during iteration in the regression cases.
-([Rust preparation](../crates/middy/src/output.rs#L408),
-[Python collection](../middy/_clients.py#L623),
-[Python cancellation](../src/playback.rs#L182))
+Both APIs now cap untimed source items and generated events, and observe
+cancellation between iterator calls. A single packet can still carry a large
+buffer, and Python retains input values while building its prepared plan.
+Bound retained packet bytes as well as item count, and verify that exceeding
+the byte budget rejects the batch before sending any of it.
+([Rust preparation](../crates/middy/src/output.rs),
+[Python collection](../middy/_clients.py))
 
 ### P2. Reconnect churn can exhaust a recording's archive descriptor budget
 

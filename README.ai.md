@@ -853,6 +853,12 @@ Rust clients enable the same transport with `with_run_in_subprocess(true)?`.
 program, arguments and operation timeout (five seconds by default). These settings
 must be selected before discovery or connection. In-process remains the default;
 empty sends never start a worker. Rust applications do not require Python.
+
+Untimed playback validates each batch before its first send. The default limit
+is 65,536 source items and 65,536 scheduled events per batch. Set
+`Output(sequence_limit=...)` in Python or `.with_sequence_limit(...)?` in
+Rust to change it. Cancellation stops between iterator calls. The iterator
+itself must return for playback to observe cancellation.
 From this checkout, install the standalone worker with
 `cargo install --path crates/middy --bin middy-worker`, or provide its executable
 path explicitly.

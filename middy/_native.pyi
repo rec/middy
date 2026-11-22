@@ -5,6 +5,8 @@ from fractions import Fraction
 
 from . import events, messages, midi
 
+DEFAULT_SEQUENCE_LIMIT: int
+
 class OutputState:
     def __init__(self) -> None: ...
     def feed(self, packet: bytes) -> None: ...
@@ -128,6 +130,7 @@ def schedule_notes(
     value: messages.Note | messages.Chord,
     beat_period: Fraction | None,
     channel: int | None,
+    limit: int,
 ) -> tuple[list[tuple[tuple[int, int], messages.Message]], tuple[int, int]]: ...
 def live_size(item: messages.Message | events.StreamDiagnostic) -> int: ...
 def output_sequence(
