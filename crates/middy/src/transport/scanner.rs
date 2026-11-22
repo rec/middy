@@ -220,15 +220,34 @@ impl Subscription {
 }
 
 fn poll(key: &Key, shared: &Shared) -> Result<()> {
+    let client = Client::new(key)?;
+    poll_ports(shared, || client.ports())
+}
+
+fn poll_ports(shared: &Shared, mut ports: impl FnMut() -> Result<Vec<PortKey>>) -> Result<()> {
     let mut deadline = shared
         .schedule
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .next;
-    let client = Client::new(key)?;
+    let mut initialized = false;
+    let mut scan_failed = false;
     loop {
-        let ports = client.ports()?;
-        {
+        if let Some(ports) = match ports() {
+            Ok(ports) => {
+                initialized = true;
+                scan_failed = false;
+                Some(ports)
+            }
+            Err(error @ (Error::Native(_) | Error::Busy)) if initialized => {
+                if !scan_failed {
+                    eprintln!("middy: MIDI device scan failed; keeping the last catalog: {error}");
+                }
+                scan_failed = true;
+                None
+            }
+            Err(error) => return Err(error),
+        } {
             let mut state = shared.state.lock().unwrap_or_else(|p| p.into_inner());
             let revision = match state.as_ref() {
                 Some(Ok(previous)) => previous.revision.wrapping_add(1),
@@ -311,5 +330,53 @@ impl Client {
             Self::Output(client) => client.ports(),
         }?;
         Ok(port_keys(&ports))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_resumes_after_native_enumeration_error() {
+        let shared = Shared {
+            state: Mutex::new(None),
+            changed: Condvar::new(),
+            schedule: Mutex::new(Schedule {
+                interval: Duration::ZERO,
+                next: Instant::now(),
+                stopped: false,
+            }),
+            timer: Condvar::new(),
+        };
+        let first = PortKey {
+            id: 1,
+            name: "first".into(),
+        };
+        let second = PortKey {
+            id: 2,
+            name: "second".into(),
+        };
+        let mut scans = 0;
+        let result = poll_ports(&shared, || {
+            scans += 1;
+            match scans {
+                1 => Ok(vec![first.clone()]),
+                2 => Err(Error::Native("temporary enumeration failure".into())),
+                3 => {
+                    let state = shared.state.lock().unwrap();
+                    assert_eq!(
+                        state.as_ref().unwrap().as_ref().unwrap().ports.as_slice(),
+                        std::slice::from_ref(&first)
+                    );
+                    Ok(vec![second.clone()])
+                }
+                _ => Err(Error::Closed),
+            }
+        });
+        assert_eq!(result, Err(Error::Closed));
+        let snapshot = shared.state.into_inner().unwrap().unwrap().unwrap();
+        assert_eq!(*snapshot.ports, [second]);
+        assert_eq!(snapshot.revision, 1);
     }
 }

@@ -37,23 +37,6 @@ that application's pitch response.
 [output cleanup](../crates/middy/src/output.rs#L833),
 [Python cancellation](../src/playback.rs#L182))
 
-### P1. A stuck native call can block discovery, close, and retirement
-
-In-process worker startup and command replies use unbounded waits. The catalog
-waits for its first snapshot, and explicit followed-input close joins its
-discovery thread, which can be waiting on a source health check or retirement.
-A driver that never returns can strand the caller and the native client slot.
-Detaching the worker at drop avoids a join there, but provides no deadline for
-these explicit operations. This is a documented limitation with a larger
-impact for shared catalogs. Test with a gated fake worker and define the
-supported timeout and recovery guarantees for supervised processes and
-in-process callers. A timed-out driver call must retain any callback state
-the driver can still access.
-([Native worker](../crates/middy/src/transport/worker.rs#L43),
-[first catalog snapshot](../crates/middy/src/transport/scanner.rs#L181),
-[followed input close](../crates/middy/src/transport/all.rs#L176),
-[ownership contract](../README.ai.md#L889))
-
 ## Reliability and data integrity
 
 ### P2. Output followers treat a recoverable empty match as terminal
@@ -69,20 +52,6 @@ requires explicit handling to avoid transmitting a note or command twice.
 ([Refresh](../crates/middy/src/output_group.rs#L83),
 [sticky failure](../crates/middy/src/output_group.rs#L158),
 [public hot-plug contract](../doc/examples.md#L64))
-
-### P2. One polling error ends an entire catalog subscription
-
-A single failed `ports()` call exits the poll loop and replaces the last
-snapshot with an error. Reopening can allocate a fresh catalog. Existing
-followers have no recovery path through that catalog, even if discovery
-recovers on the next attempt. An input follower also publishes its terminal
-error after retiring the sources, so a stalled retirement can postpone the
-visible failure. Test one failed scan followed by a successful scan with the
-same endpoints, and distinguish transient enumeration from terminal backend
-failure before changing retry behavior.
-([Catalog error publication](../crates/middy/src/transport/scanner.rs#L165),
-[polling](../crates/middy/src/transport/scanner.rs#L222),
-[input error publication](../crates/middy/src/transport/all.rs#L415))
 
 ### P2. Untimed playback can exhaust memory or wait forever before sending
 

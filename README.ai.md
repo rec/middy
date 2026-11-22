@@ -834,6 +834,12 @@ terminate a failed child; native errors, crashes and timeouts invalidate that
 client without automatically reopening it. `worker_failure` reports a known
 worker failure, not endpoint health. `run_in_subprocess=False` uses the same Rust
 transport in-process with fewer resources and no native-operation deadline.
+An in-process driver can hold startup, discovery, send, source health checks,
+or explicit close indefinitely. A stuck scan also delays the first snapshot
+for every client sharing that catalog. Use subprocess isolation when the native
+driver must be subject to a deadline. The timeout applies to an individual
+worker operation. A call that visits several workers can take longer, and a
+Python callback or iterator running in the parent can still block its caller.
 Python defaults to `subprocess_worker="python"`, which launches a fresh Python
 interpreter whose worker module enters the Rust service. Set
 `subprocess_worker="rust"` to launch `middy-worker` directly. The optional
@@ -947,8 +953,11 @@ MIDI-using process until exit, avoiding Apple's last-client disposal/reopen haza
 and continuously servicing topology notifications. Existing per-client operation
 threads remain separate. Virtual creation/disposal waits up to two seconds for
 its matching local notification; SDK calls themselves can still block. A failed
-CoreMIDI metadata read fails discovery without returning partial results or
-preventing a later explicit discovery attempt. There are no automatic retries.
+CoreMIDI metadata read fails explicit discovery without returning partial results
+or preventing a later attempt. A following catalog with a successful snapshot
+keeps that snapshot across native enumeration errors and tries again at the
+next scan interval. Failed startup and terminal worker errors are reported.
+A followed input drains its sources before reporting its terminal failure.
 Ports and ordinary clients still close normally. Pure message/file imports do
 not initialize this runtime. This is not recovery from a crashed/restarted MIDI service;
 explicit isolation permits replacing the affected child, while in-process use
