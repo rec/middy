@@ -137,16 +137,6 @@ budget and decide how to expose capacity or rotate long recordings.
 
 ## API, diagnostics, and maintenance
 
-- **P3. Equivalent Rust and Python playback can round differently.** The
-  Rust tuple form prepares each scalar as a separate segment and sums
-  rounded nanoseconds. A Rust iterable and adjacent Python scalar values
-  retain fractions within one segment. Three one-third-beat rests at 120 BPM
-  end at 500,000,001 ns in a Rust tuple and 500,000,000 ns in one rational
-  batch. A fake-clock test can determine whether composition should preserve
-  exact elapsed time across ordinary segments.
-  ([Rust tuple expansion](../crates/middy/src/output.rs#L164),
-  [Rust segment timing](../crates/middy/src/output.rs#L421),
-  [Python batching](../middy/_clients.py#L597))
 - **P3. Public names and documentation hide important behavior.**
   `set_scan_interval` is process-wide, but there is one polling worker per
   backend, direction, and subprocess configuration. The example says there

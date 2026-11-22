@@ -326,7 +326,7 @@ impl Output {
             ..Report::default()
         };
         let mut origin_ns = None;
-        let mut elapsed = 0u64;
+        let mut elapsed = Rational::from(0);
         let result = (|| {
             transport::ensure_control_thread()
                 .map_err(|e| Cause::Send(crate::midi::Error::Transport(e)))?;
@@ -369,7 +369,7 @@ impl Output {
                     self.prepare_message(first.clone()).map_err(Cause::Input)?;
                     self.open().map_err(|e| Cause::Send(e.into()))?;
                     let start = *origin_ns.get_or_insert_with(|| self.clock.now_ns());
-                    let mut duration = 0;
+                    let mut duration = Rational::from(0);
                     for value in std::iter::once(Ok(OutputValue::Message(first))).chain(values) {
                         if self.playback.cancel.cancelled() {
                             report.cancelled = true;
@@ -386,10 +386,12 @@ impl Output {
                             )));
                         }
                         let planned = planner.deadline(&message).map_err(Cause::Input)?;
-                        duration = planned.delay_ns;
+                        duration = Rational::new(i128::from(planned.delay_ns), 1_000_000_000)
+                            .map_err(Cause::Input)?;
                         let offset = elapsed
                             .checked_add(duration)
-                            .ok_or_else(|| Cause::Input(invalid("sequence deadline overflow")))?;
+                            .and_then(nanoseconds)
+                            .map_err(Cause::Input)?;
                         let prepared = self.prepare_message(message).map_err(Cause::Input)?;
                         if !self.emit(
                             start,
@@ -402,9 +404,7 @@ impl Output {
                             break;
                         }
                     }
-                    elapsed = elapsed
-                        .checked_add(duration)
-                        .ok_or_else(|| Cause::Input(invalid("sequence deadline overflow")))?;
+                    elapsed = elapsed.checked_add(duration).map_err(Cause::Input)?;
                 } else {
                     let mut ordinary = vec![first];
                     for value in values {
@@ -418,19 +418,17 @@ impl Output {
                         }
                         ordinary.push(value);
                     }
-                    let plan = self.prepare(ordinary).map_err(Cause::Input)?;
+                    let plan = self.prepare(ordinary, &mut elapsed).map_err(Cause::Input)?;
                     if plan.iter().any(|(_, p, _)| p.is_some()) {
                         self.open().map_err(|e| Cause::Send(e.into()))?;
                     }
                     let start = *origin_ns.get_or_insert_with(|| self.clock.now_ns());
-                    let duration = plan.last().expect("final sequence deadline").0;
+                    let end = plan.last().expect("final sequence deadline").0;
                     // Validate the final absolute deadline before this sequence sends.
                     start
-                        .checked_add(elapsed)
-                        .and_then(|v| v.checked_add(duration))
+                        .checked_add(end)
                         .ok_or_else(|| Cause::Input(invalid("sequence deadline overflow")))?;
                     for (offset, packet, rounded) in plan {
-                        let offset = elapsed + offset;
                         if !self.emit(
                             start,
                             offset,
@@ -442,7 +440,6 @@ impl Output {
                             break;
                         }
                     }
-                    elapsed += duration;
                 }
                 if report.cancelled {
                     break;
@@ -544,6 +541,7 @@ impl Output {
     fn prepare(
         &self,
         values: impl IntoIterator<Item = OutputValue>,
+        elapsed: &mut Rational,
     ) -> io::Result<Vec<(u64, Option<Prepared>, bool)>> {
         if self.closed {
             return Err(io::Error::new(
@@ -551,26 +549,25 @@ impl Output {
                 "output is closed",
             ));
         }
-        let mut elapsed = Rational::from(0);
         let mut plan = Vec::new();
         for value in values {
-            let start = nanoseconds(elapsed)?;
+            let start = nanoseconds(*elapsed)?;
             let rounded = elapsed.multiply(1_000_000_000, 1)?.denominator() != 1;
             match value {
                 OutputValue::Record(_) => {
                     return Err(invalid("archive record requires source normalization"))
                 }
                 OutputValue::Note(note) => {
-                    self.prepare_notes(std::slice::from_ref(&note), &mut elapsed, &mut plan)?;
+                    self.prepare_notes(std::slice::from_ref(&note), elapsed, &mut plan)?;
                 }
                 OutputValue::Chord(chord) => {
-                    self.prepare_notes(chord.notes(), &mut elapsed, &mut plan)?;
+                    self.prepare_notes(chord.notes(), elapsed, &mut plan)?;
                 }
                 OutputValue::Rest(rest) => {
-                    elapsed = elapsed.checked_add(rest.duration().seconds(self.bpm)?)?
+                    *elapsed = elapsed.checked_add(rest.duration().seconds(self.bpm)?)?
                 }
                 OutputValue::Wait(duration) => {
-                    elapsed = elapsed.checked_add(duration.seconds(self.bpm)?)?
+                    *elapsed = elapsed.checked_add(duration.seconds(self.bpm)?)?
                 }
                 OutputValue::Message(message) => {
                     plan.push((start, Some(self.prepare_message(message)?), rounded))
@@ -582,7 +579,7 @@ impl Output {
                 }
             }
         }
-        plan.push((nanoseconds(elapsed)?, None, false));
+        plan.push((nanoseconds(*elapsed)?, None, false));
         Ok(plan)
     }
     fn prepare_notes(
@@ -1495,6 +1492,28 @@ mod tests {
         );
         f.output.close().unwrap();
         assert!(f.packets().is_empty());
+    }
+
+    #[test]
+    fn fractional_beats_accumulate_across_tuple_members() {
+        let mut fixture = Fixture::new();
+        fixture.output = fixture.output.with_bpm(120).unwrap();
+        let third = Rest::new(Beats::new(1, 3).unwrap());
+        fixture
+            .output
+            .send((third, third, third, messages::NoteOn::new(60).unwrap()))
+            .unwrap();
+        assert_eq!(
+            *fixture.deadlines.borrow(),
+            [
+                166_666_667,
+                333_333_333,
+                500_000_000,
+                500_000_000,
+                500_000_000
+            ]
+        );
+        assert_eq!(fixture.packets(), bytes(&[b"\x90\x3c\x5a"]));
     }
 
     #[test]
