@@ -190,14 +190,11 @@ impl Registry {
                 label,
                 clock_identity,
             } => {
-                if id.is_empty()
-                    || self.streams.contains_key(id.as_str())
-                    || self.clocks.len() + self.streams.len() >= 128
-                {
-                    return Err(invalid(
-                        0,
-                        "invalid/duplicate stream or descriptor count limit",
-                    ));
+                if id.is_empty() || self.streams.contains_key(id.as_str()) {
+                    return Err(invalid(0, "invalid/duplicate stream descriptor"));
+                }
+                if self.clocks.len() + self.streams.len() >= 128 {
+                    return Err(invalid(0, "descriptor count limit (128)"));
                 }
                 if clock_identity
                     .as_ref()
@@ -948,8 +945,13 @@ pub struct Writer<W> {
     registry: Registry,
     limit: usize,
     offset: u64,
-    finished: bool,
-    failed: bool,
+    state: WriterState,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriterState {
+    Open,
+    RejectedRecord,
+    Closed,
 }
 impl<W: Write> Writer<W> {
     pub fn new(mut inner: W, limit: usize) -> io::Result<Self> {
@@ -962,8 +964,7 @@ impl<W: Write> Writer<W> {
             registry: Registry::default(),
             limit,
             offset: 12,
-            finished: false,
-            failed: false,
+            state: WriterState::Open,
         })
     }
     fn frame(&mut self, body: &[u8]) -> io::Result<()> {
@@ -981,7 +982,7 @@ impl<W: Write> Writer<W> {
         Ok(())
     }
     pub fn write(&mut self, r: &Record) -> io::Result<()> {
-        if self.finished || self.failed {
+        if self.state != WriterState::Open {
             return Err(invalid(self.offset, "writer closed or failed"));
         }
         if let Record::Event(message) = r {
@@ -991,7 +992,8 @@ impl<W: Write> Writer<W> {
                 }
             }
         }
-        let result = (|| {
+        self.state = WriterState::RejectedRecord;
+        (|| {
             if payload_size(r)? > self.limit {
                 return Err(invalid(self.offset, "record payload limit"));
             }
@@ -1000,36 +1002,32 @@ impl<W: Write> Writer<W> {
                 return Err(invalid(self.offset, "record limit"));
             }
             self.registry.check(r)?;
-            self.frame(&body)
-        })();
-        if result.is_err() {
-            self.failed = true;
-        }
-        result.map_err(|e| {
+            self.state = WriterState::Closed;
+            self.frame(&body)?;
+            self.state = WriterState::Open;
+            Ok(())
+        })()
+        .map_err(|e| {
             crate::file_io::at_location(
                 format!("record {}, byte {}", self.registry.records, self.offset),
                 e,
             )
         })
     }
+    /// A rejected record permits an incomplete trailer if the stream is intact.
     pub fn finish(&mut self, complete: bool, reason: &str) -> io::Result<()> {
-        if self.finished || self.failed {
+        if self.state == WriterState::Closed
+            || (complete && self.state == WriterState::RejectedRecord)
+        {
             return Err(invalid(self.offset, "writer closed or failed"));
         }
-        let result = (|| {
-            let mut body = 65535u16.to_be_bytes().to_vec();
-            body.extend(self.registry.records.to_be_bytes());
-            body.push(u8::from(complete));
-            string(&mut body, reason)?;
-            self.frame(&body)?;
-            self.inner.flush()
-        })();
-        if result.is_ok() {
-            self.finished = true;
-        } else {
-            self.failed = true;
-        }
-        result
+        self.state = WriterState::Closed;
+        let mut body = 65535u16.to_be_bytes().to_vec();
+        body.extend(self.registry.records.to_be_bytes());
+        body.push(u8::from(complete));
+        string(&mut body, reason)?;
+        self.frame(&body)?;
+        self.inner.flush()
     }
 }
 pub struct Reader<R> {

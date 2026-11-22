@@ -2,7 +2,7 @@
 
 import struct
 import zlib
-from collections.abc import Sequence
+from collections.abc import Buffer, Sequence
 from io import BytesIO
 from pathlib import Path
 
@@ -81,6 +81,41 @@ def test_archive_roundtrip_preserves_all_commands_exact_ticks_and_absence() -> N
         assert not recovery.complete and recovery.problem
     with pytest.raises(OSError, match="unknown record"):
         list(archive.Reader(BytesIO(data)))
+
+
+def test_rejected_record_allows_only_an_incomplete_trailer() -> None:
+    destination = BytesIO()
+    writer = archive.Writer(destination)
+    stream = archive.Stream(id="keys", label="Keyboard")
+    writer.write(stream)
+    with pytest.raises(OSError, match="invalid/duplicate stream"):
+        writer.write(stream)
+    with pytest.raises(OSError, match="writer closed or failed"):
+        writer.write(archive.Stream(id="other", label="Other"))
+    with pytest.raises(OSError, match="writer closed or failed"):
+        writer.finish()
+    writer.finish(complete=False, reason="duplicate stream")
+    reader = archive.Reader(BytesIO(destination.getvalue()), recover=True)
+    assert list(reader) == [stream]
+    assert not reader.complete
+    assert "incomplete capture: duplicate stream" in str(reader.problem)
+
+
+def test_partial_frame_io_failure_prevents_even_an_incomplete_trailer() -> None:
+    class Destination(BytesIO):
+        def write(self, data: Buffer, /) -> int:
+            if self.tell() == 16:
+                super().write(memoryview(data)[:1])
+                raise OSError("disk write failed")
+            return super().write(data)
+
+    destination = Destination()
+    writer = archive.Writer(destination)
+    with pytest.raises(OSError, match="disk write failed"):
+        writer.write(archive.Stream(id="keys", label="Keyboard"))
+    with pytest.raises(OSError, match="writer closed or failed"):
+        writer.finish(complete=False, reason="disk write failed")
+    assert destination.tell() == 17
 
 
 def test_crc_completion_and_limits_cannot_be_mistaken_for_success() -> None:

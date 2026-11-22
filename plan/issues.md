@@ -16,6 +16,8 @@ empty and disk space is ample. Memory recording accumulates records outside
 the file writer's registry, so the same limit can surface only when saving
 the result. Test repeated connection generations against the archive
 budget and decide how to expose capacity or rotate long recordings.
+File recording now preserves an incomplete trailer with the descriptor failure
+reason so archive recovery can report the cause alongside the verified prefix.
 ([Recording declarations](../crates/middy/src/input_recording.rs#L111),
 [archive registry](../crates/middy/src/archive.rs#L165),
 [memory recorder](../crates/middy/src/recording.rs#L183))

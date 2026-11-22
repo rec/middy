@@ -347,6 +347,50 @@ fn memory_recording_retains_diagnostics_and_stops_admission() {
 }
 
 #[test]
+fn recording_reports_descriptor_exhaustion_in_its_incomplete_trailer() {
+    let saved = Arc::new(Mutex::new(vec![]));
+    let recorder = recording::Recorder::new(
+        Buffer(Arc::clone(&saved)),
+        vec![
+            Record::Clock(clock()),
+            Record::Stream {
+                id: "s".into(),
+                label: "keys".into(),
+                clock_identity: None,
+            },
+        ],
+        1024,
+        256,
+        8192,
+        false,
+        false,
+    )
+    .unwrap();
+    let played = Record::Event(Box::new(event(1)));
+    assert!(recorder.record(played.clone()));
+    for generation in 0..127 {
+        assert!(recorder.record(Record::Stream {
+            id: format!("stream-{generation}"),
+            label: "keys".into(),
+            clock_identity: None,
+        }));
+    }
+    let report = recorder.stop(Duration::from_secs(2)).unwrap();
+    assert!(!report.complete);
+    assert_eq!(report.records, 129);
+    let data = saved.lock().unwrap();
+    let mut reader = archive::Reader::new(data.as_slice(), 1024, true, false).unwrap();
+    let prefix = reader.by_ref().collect::<io::Result<Vec<_>>>().unwrap();
+    assert_eq!(prefix.len(), 129);
+    assert_eq!(prefix[2], played);
+    let problem = reader.problem.unwrap();
+    assert!(problem.contains("incomplete capture"));
+    let failure = report.failure.as_deref().unwrap();
+    assert!(failure.contains("descriptor count limit (128)"));
+    assert!(problem.contains(failure));
+}
+
+#[test]
 fn recording_finishes_verified_data_and_marks_loss_without_blocking_admission() {
     let saved = Arc::new(Mutex::new(vec![]));
     let r = recording::Recorder::new(

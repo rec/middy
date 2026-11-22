@@ -125,9 +125,11 @@ does not establish complete capture. To preserve forward records verbatim,
 write their Opaque values without interpreting them.
 
 Explicit writer finish emits the trailer and flushes. Abandoning a writer leaves
-an incomplete file. Write/flush failures propagate; a failed writer cannot be
-resumed or claim completion. A successful flush is not a power-loss durability
-promise: fsync, atomic replacement and media guarantees are not supplied.
+an incomplete file. If validation rejects a record before its frame is written,
+the writer can finish with an incomplete trailer containing the failure reason.
+A frame write or flush failure is terminal. A successful flush is not a
+power-loss durability promise: fsync, atomic replacement and media guarantees
+are not supplied.
 Streaming bounds working record/descriptor storage, not returned records,
 caller-held objects, allocator overhead, OS buffers or CPU use. File errors
 must be handled even when the source is local. Blocking filesystems remain a
