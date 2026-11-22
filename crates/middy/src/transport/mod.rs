@@ -11,6 +11,7 @@ pub mod all;
 mod ffi;
 mod native;
 pub(crate) mod scanner;
+pub(crate) mod selection;
 pub mod subprocess;
 mod worker;
 
@@ -702,12 +703,34 @@ impl OutputConnection {
             }
             return self.send(&Packet::Ump(words));
         }
-        let packets: Vec<Packet> = crate::codecs::expand(command)
+        let packets = crate::codecs::expand(command)
             .map_err(|_| Error::Invalid("command channel is unassigned".into()))?
             .iter()
             .map(|message| crate::codecs::encode(message).map(Packet::Bytes))
-            .collect::<std::result::Result<_, _>>()
+            .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|_| Error::Invalid("message channel is unassigned".into()))?;
+        self.send_prepared_batch(packets)
+    }
+
+    /// Send an already expanded MIDI 1 command as one ordered worker request.
+    #[doc(hidden)]
+    pub fn send_byte_batch(&self, packets: &[Vec<u8>]) -> Result<()> {
+        if self.encoding != Encoding::Bytes
+            || packets.is_empty()
+            || packets
+                .iter()
+                .any(|packet| packet.is_empty() || packet.len() > i32::MAX as usize)
+        {
+            return Err(Error::Invalid("invalid prepared MIDI byte command".into()));
+        }
+        let packets = packets
+            .iter()
+            .map(|bytes| native::copy(bytes).map(Packet::Bytes))
+            .collect::<Result<Vec<_>>>()?;
+        self.send_prepared_batch(packets)
+    }
+
+    fn send_prepared_batch(&self, packets: Vec<Packet>) -> Result<()> {
         let total_messages = packets.len();
         self.worker
             .call(move |native| native.send_packets(&packets))
@@ -874,7 +897,7 @@ mod tests {
                 name: name.into(),
             })
             .collect();
-        let select = crate::output::select_port;
+        let select = super::selection::select_port;
         assert_eq!(select(&ports, None).unwrap(), &ports[0]);
         assert_eq!(select(&ports, Some("FLOW")).unwrap(), &ports[1]);
         assert_eq!(select(&ports, Some("*é?")).unwrap(), &ports[2]);

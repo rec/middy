@@ -44,26 +44,21 @@ class NativeConnection:
         if self.group_state is not None:
             self.group_state.feed(packet)
 
-    def send_command(
-        self,
-        command: messages.ControlChange
-        | messages.ParameterStep
-        | messages.ParameterSet
-        | messages.ProgramChange
-        | ZoneConfiguration,
-    ) -> None:
-        for i, message in enumerate(codecs.expand(command)):
+    def send_byte_batch(self, packets: tuple[bytes, ...]) -> None:
+        for i, packet in enumerate(packets):
             if self.partial == i:
-                raise midi.CompoundSendError("partial", i, 2)
-            self.sink.send(message)
-            if self.group_state is not None:
-                self.group_state.feed(codecs.encode(message))
+                raise midi.CompoundSendError("partial", i, len(packets))
+            self.send(packet)
 
-    def send_mpe(self, message: messages.Message, start: int | None, end: bool) -> None:
-        prepared = _native.prepare_output(midi.Encoding.Bytes, message)
+    def send_mpe(
+        self,
+        message: messages.Message,
+        prepared: bytes | midi.UmpPacket | tuple[bytes, ...],
+        start: int | None,
+        end: bool,
+    ) -> None:
         if isinstance(prepared, tuple):
-            assert isinstance(message, (messages.ParameterSet, ZoneConfiguration))
-            self.send_command(message)
+            self.send_byte_batch(prepared)
         else:
             assert isinstance(prepared, bytes)
             self.send(prepared)

@@ -7,6 +7,7 @@ use crate::state::Client;
 use middy::transport;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 use pyo3::{PyTraverseError, PyVisit};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -170,6 +171,10 @@ enum SenderPort {
     Single(transport::OutputConnection),
     Group(Box<middy::midi::OutputGroup>),
 }
+enum PreparedWire {
+    Packet(transport::Packet),
+    Batch(Vec<Vec<u8>>),
+}
 impl SenderPort {
     fn send_failure_is_terminal(&self) -> bool {
         match self {
@@ -184,10 +189,10 @@ impl SenderPort {
             Self::Group(c) => c.send(packet),
         }
     }
-    fn send_command(&mut self, command: &middy::messages::AnyCommand) -> middy::midi::Result<()> {
+    fn send_byte_batch(&mut self, packets: &[Vec<u8>]) -> middy::midi::Result<()> {
         match self {
-            Self::Single(c) => c.send_command(command).map_err(middy::midi::Error::Send),
-            Self::Group(c) => c.send_command(command),
+            Self::Single(c) => c.send_byte_batch(packets).map_err(middy::midi::Error::Send),
+            Self::Group(c) => c.send_byte_batch(packets),
         }
     }
     fn close(self) -> middy::midi::Result<transport::Output> {
@@ -202,20 +207,14 @@ impl Sender {
         self.port.send(packet)
     }
 
-    fn send_command(&mut self, command: &middy::messages::AnyCommand) -> middy::midi::Result<()> {
-        self.port.send_command(command)
-    }
-
     fn send_mpe(
         &mut self,
         message: &middy::events::Payload,
+        wire: &PreparedWire,
         start: Option<u8>,
         end: bool,
         encoding: transport::Encoding,
     ) -> middy::midi::Result<()> {
-        use middy::events::Payload;
-        use middy::messages::PrimitiveMessage;
-        use middy::ump::UmpValue;
         if let Some(members) = start {
             if let SenderPort::Group(group) = &mut self.port {
                 group.pin()?;
@@ -225,16 +224,9 @@ impl Sender {
         if let Some(state) = &mut self.mpe {
             state.attempt(message);
         }
-        match message {
-            Payload::Command(command) => self.send_command(command)?,
-            Payload::Message(message) => {
-                let packet = match encoding {
-                    transport::Encoding::Bytes => transport::Packet::Bytes(message.encode()?),
-                    transport::Encoding::Ump => transport::Packet::Ump(message.encode_words()?),
-                };
-                self.send(&packet)?;
-            }
-            Payload::Ump(_) => unreachable!("authored MPE uses MIDI 1 messages"),
+        match wire {
+            PreparedWire::Batch(packets) => self.port.send_byte_batch(packets)?,
+            PreparedWire::Packet(packet) => self.send(packet)?,
         }
         if end {
             self.mpe = None;
@@ -291,27 +283,11 @@ impl OutputConnection {
         })
     }
 
-    fn send_command(&self, py: Python<'_>, command: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn send_byte_batch(&self, py: Python<'_>, packets: Vec<Vec<u8>>) -> PyResult<()> {
         check_blocking_thread()?;
-        let command = crate::messages::extract_command(command)?;
-        // Validate before entering Managed::send: preparation errors must not
-        // retire a healthy connection as though a backend send had failed.
-        if self.encoding == Encoding::Ump {
-            let words = middy::ump::encode(&middy::events::Payload::Command(command.clone()))
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            transport::validate_packet(self.encoding.native(), &transport::Packet::Ump(words))
-                .map_err(|e| transport_error(e, "send"))?;
-        } else {
-            use middy::messages::PrimitiveMessage;
-            for message in
-                middy::codecs::expand(&command).map_err(|e| PyValueError::new_err(e.to_string()))?
-            {
-                message
-                    .encode()
-                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            }
-        }
-        self.send_value(py, &command, Sender::send_command)
+        self.send_value(py, &packets, |native, packets| {
+            native.port.send_byte_batch(packets)
+        })
     }
 
     fn send(&self, py: Python<'_>, packet: &Bound<'_, PyAny>) -> PyResult<()> {
@@ -325,14 +301,20 @@ impl OutputConnection {
         &self,
         py: Python<'_>,
         message: &Bound<'_, PyAny>,
+        prepared: &Bound<'_, PyAny>,
         start: Option<u8>,
         end: bool,
     ) -> PyResult<()> {
         check_blocking_thread()?;
         let payload = crate::event_values::payload(message)?;
+        let wire = if prepared.is_instance_of::<PyTuple>() {
+            PreparedWire::Batch(prepared.extract()?)
+        } else {
+            PreparedWire::Packet(extract_packet(prepared)?)
+        };
         let encoding = self.encoding.native();
-        self.send_value(py, &payload, move |native, payload| {
-            native.send_mpe(payload, start, end, encoding)
+        self.send_value(py, &wire, move |native, wire| {
+            native.send_mpe(&payload, wire, start, end, encoding)
         })
     }
 

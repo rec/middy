@@ -160,7 +160,9 @@ pub fn prepared_size(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     if let Ok(packet) = value.extract::<PyRef<'_, UmpPacket>>() {
         return Ok(std::mem::size_of_val(packet.words.as_slice()));
     }
-    value.cast::<PyTuple>()?.get_item(1)?.extract()
+    value.cast::<PyTuple>()?.iter().try_fold(0, |size, packet| {
+        Ok(size + packet.cast::<PyBytes>()?.as_bytes().len())
+    })
 }
 
 fn prepare_message(
@@ -221,8 +223,7 @@ fn prepare_message(
                 .into_any());
             }
             (Encoding::Bytes, Payload::Command(command)) => {
-                return Ok(crate::codecs::prepare_command(&command)?
-                    .into_pyobject(py)?
+                return Ok(crate::codecs::prepare_command(py, &command)?
                     .into_any()
                     .unbind());
             }

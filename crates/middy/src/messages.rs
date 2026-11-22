@@ -16,7 +16,7 @@
 //! ```
 
 #[doc(hidden)]
-pub use crate::sequence::schedule_notes;
+pub use crate::sequence::{schedule_notes, ResolvedNote};
 pub use crate::sequence::{Beats, Chord, Note, NoteDuration, Rest};
 use std::error::Error;
 use std::fmt;

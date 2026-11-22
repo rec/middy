@@ -123,11 +123,7 @@ impl Note {
 
     /// Set pitch relative to the original note at an offset from its attack.
     pub fn bend(mut self, at: impl Into<NoteDuration>, semitones: f64) -> Result<Self, ValueError> {
-        if !(-48.0..=48.0).contains(&semitones) {
-            return Err(ValueError("bend must be within ±48 semitones".into()));
-        }
-        let value = (semitones * 8192.0 / 48.0).round_ties_even() as i64;
-        self.bends.push((at.into(), value.min(8191)));
+        self.bends.push((at.into(), bend_value(semitones)?));
         Ok(self)
     }
 
@@ -141,6 +137,59 @@ impl Note {
 
     pub fn channel(&self) -> Option<u8> {
         self.attack.channel()
+    }
+
+    pub(crate) fn resolve(&self, bpm: Option<Rational>) -> io::Result<ResolvedNote> {
+        let bends = self
+            .bends
+            .iter()
+            .map(|(at, value)| Ok((at.seconds(bpm)?, *value)))
+            .collect::<io::Result<_>>()?;
+        Ok(ResolvedNote {
+            attack: self.attack.clone(),
+            start: self.start.seconds(bpm)?,
+            duration: self.duration.seconds(bpm)?,
+            bends,
+        })
+    }
+}
+
+fn bend_value(semitones: f64) -> Result<i64, ValueError> {
+    if !(-48.0..=48.0).contains(&semitones) {
+        return Err(ValueError("bend must be within ±48 semitones".into()));
+    }
+    let value = (semitones * 8192.0 / 48.0).round_ties_even() as i64;
+    Ok(value.min(8191))
+}
+
+/// Authored note after its timing has been converted to exact seconds.
+#[doc(hidden)]
+pub struct ResolvedNote {
+    attack: NoteOn,
+    start: Rational,
+    duration: Rational,
+    bends: Vec<(Rational, i64)>,
+}
+
+impl ResolvedNote {
+    pub fn new(attack: NoteOn, start: Rational, duration: Rational) -> Result<Self, ValueError> {
+        if start.numerator() < 0 || duration.numerator() < 0 {
+            return Err(ValueError("note timing must be nonnegative".into()));
+        }
+        Ok(Self {
+            attack,
+            start,
+            duration,
+            bends: Vec::new(),
+        })
+    }
+
+    pub fn bend(&mut self, at: Rational, semitones: f64) -> Result<(), ValueError> {
+        if at.numerator() < 0 {
+            return Err(ValueError("bend offset must be nonnegative".into()));
+        }
+        self.bends.push((at, bend_value(semitones)?));
+        Ok(())
     }
 }
 
@@ -188,13 +237,12 @@ pub struct NoteSchedule {
 
 #[doc(hidden)]
 pub fn schedule_notes(
-    notes: &[Note],
-    bpm: Option<Rational>,
+    notes: &[ResolvedNote],
     channel: Option<u8>,
     encoding: crate::transport::Encoding,
 ) -> io::Result<NoteSchedule> {
     let mpe = notes.iter().any(|note| !note.bends.is_empty());
-    if mpe && (channel.is_some() || notes.iter().any(|note| note.channel().is_some())) {
+    if mpe && (channel.is_some() || notes.iter().any(|note| note.attack.channel().is_some())) {
         return Err(invalid(
             "automatic MPE requires automatic channel assignment",
         ));
@@ -203,18 +251,17 @@ pub fn schedule_notes(
     let mut actions = Vec::new();
     let mut end = Rational::from(0);
     for (i, note) in notes.iter().enumerate() {
-        let start = note.start.seconds(bpm)?;
-        let duration = note.duration.seconds(bpm)?;
+        let start = note.start;
+        let duration = note.duration;
         let release = start.checked_add(duration)?;
         if compare_time(release, end).is_gt() {
             end = release;
         }
-        if mpe && (duration.numerator() == 0 || note.velocity() == 0) {
+        if mpe && (duration.numerator() == 0 || note.attack.velocity() == 0) {
             return Err(invalid("MPE notes require positive duration and velocity"));
         }
         actions.push((start, false, i, Action::Attack));
         for &(at, value) in &note.bends {
-            let at = at.seconds(bpm)?;
             if !compare_time(at, duration).is_lt() {
                 return Err(invalid("bend offset must be before the note ends"));
             }
@@ -231,10 +278,11 @@ pub fn schedule_notes(
     let mut events = Vec::new();
     for (at, _, i, action) in actions {
         let note = &notes[i];
-        let channel = i64::from(channel.or(note.channel()).unwrap_or(1));
+        let channel = i64::from(channel.or(note.attack.channel()).unwrap_or(1));
         let message = match action {
             Action::Attack if mpe => {
-                let voice = allocator.allocate(note.note().into(), note.velocity().into())?;
+                let voice =
+                    allocator.allocate(note.attack.note().into(), note.attack.velocity().into())?;
                 members = members.max(voice.channel() - 1);
                 let attack = voice.note_on();
                 voices[i] = Some(voice);
@@ -248,7 +296,7 @@ pub fn schedule_notes(
                 AnyMessage::PitchBend(PitchBend::new()?.with_channel(voice.channel().into())?)
             }
             Action::Release => {
-                AnyMessage::NoteOff(NoteOff::new(note.note().into())?.with_channel(channel)?)
+                AnyMessage::NoteOff(NoteOff::new(note.attack.note().into())?.with_channel(channel)?)
             }
             Action::Bend(value) => {
                 let voice = voices[i].as_ref().expect("bend is within note");

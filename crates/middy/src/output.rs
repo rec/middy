@@ -593,7 +593,7 @@ impl Output {
                 return Ok(());
             }
             let ports = self.ports()?;
-            let selected = select_port(&ports, None)?;
+            let selected = transport::selection::select_port(&ports, None)?;
             let client = self.client.take().expect("discovery initialized client");
             self.connection =
                 Some(Connection::Native(client.connect(selected).map_err(
@@ -671,20 +671,23 @@ impl Output {
     ) -> io::Result<()> {
         let remaining = self.sequence_limit - plan.len();
         crate::sequence::check_event_limit(notes, remaining)?;
+        let notes = notes
+            .iter()
+            .map(|note| note.resolve(self.bpm))
+            .collect::<io::Result<Vec<_>>>()?;
         let crate::sequence::NoteSchedule {
             events,
             duration,
             members,
-        } = crate::sequence::schedule_notes(notes, self.bpm, self.channel, self.options.encoding)?;
+        } = crate::sequence::schedule_notes(&notes, self.channel, self.options.encoding)?;
         let count = events.len();
         for (index, (offset, message)) in events.into_iter().enumerate() {
             let at = elapsed.checked_add(offset)?;
-            let prepared = self.prepare_message(message.clone())?;
             let prepared = if members == 0 {
-                prepared
+                self.prepare_message(message)?
             } else {
                 Prepared::Mpe {
-                    packet: Box::new(prepared),
+                    packet: Box::new(self.prepare_message(message.clone())?),
                     message,
                     start: (index == 0).then_some(members),
                     end: index + 1 == count,
@@ -726,7 +729,7 @@ impl Output {
                     .iter()
                     .map(PrimitiveMessage::encode)
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Prepared::Command { command, packets })
+                Ok(Prepared::Command(packets))
             }
             Payload::Ump(message) if self.options.encoding == Encoding::Ump => {
                 use crate::ump::{PacketValue, UmpValue};
@@ -833,8 +836,8 @@ impl Output {
                 }
                 Ok(())
             }
-            Prepared::Command { command, packets } => {
-                let result = connection.send_command(&command);
+            Prepared::Command(packets) => {
+                let result = connection.send_byte_batch(&packets);
                 let completed = match &result {
                     Ok(()) => packets.len(),
                     Err(crate::midi::Error::Send(transport::Error::CompoundSend {
@@ -893,10 +896,7 @@ impl Drop for Output {
 
 enum Prepared {
     Packet(Packet),
-    Command {
-        command: AnyCommand,
-        packets: Vec<Vec<u8>>,
-    },
+    Command(Vec<Vec<u8>>),
     Mpe {
         packet: Box<Prepared>,
         message: Payload,
@@ -909,7 +909,7 @@ impl Prepared {
         match self {
             Self::Packet(Packet::Bytes(bytes)) => bytes.len(),
             Self::Packet(Packet::Ump(words)) => std::mem::size_of_val(words.as_slice()),
-            Self::Command { packets, .. } => packets.iter().map(Vec::len).sum(),
+            Self::Command(packets) => packets.iter().map(Vec::len).sum(),
             Self::Mpe { packet, .. } => packet.wire_bytes(),
         }
     }
@@ -945,19 +945,18 @@ impl Connection {
                 .map_err(crate::midi::Error::Send),
         }
     }
-    fn send_command(&mut self, command: &AnyCommand) -> crate::midi::Result<()> {
+    fn send_byte_batch(&mut self, packets: &[Vec<u8>]) -> crate::midi::Result<()> {
         match self {
             Self::Native(connection) => connection
-                .send_command(command)
+                .send_byte_batch(packets)
                 .map_err(crate::midi::Error::Send),
-            Self::Group(group) => group.send_command(command),
+            Self::Group(group) => group.send_byte_batch(packets),
             #[cfg(test)]
             Self::Test(connection) => {
-                let packets = command.expand().expect("prepared command");
-                for (index, message) in packets.iter().enumerate() {
+                for (index, bytes) in packets.iter().enumerate() {
                     connection
                         .borrow_mut()
-                        .send(Packet::Bytes(message.encode().expect("resolved command")))
+                        .send(Packet::Bytes(bytes.clone()))
                         .map_err(|cause| {
                             crate::midi::Error::Send(transport::Error::CompoundSend {
                                 completed_messages: Some(index),
@@ -1086,93 +1085,6 @@ impl OutputState {
             })
             .chain(self.resets.into_values())
     }
-}
-pub(crate) fn select_port<'a>(ports: &'a [Port], pattern: Option<&str>) -> io::Result<&'a Port> {
-    Ok(&ports[select_port_index(ports.iter().map(|p| p.name()), pattern)?])
-}
-/// Shared selection policy for native ports and Python transport descriptors.
-#[doc(hidden)]
-pub fn select_port_index<'a>(
-    names: impl IntoIterator<Item = &'a str>,
-    pattern: Option<&str>,
-) -> io::Result<usize> {
-    let mut names = names.into_iter().enumerate();
-    let Some(pattern) = pattern else {
-        return names
-            .next()
-            .map(|(i, _)| i)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no MIDI ports available"));
-    };
-    if pattern.is_empty() {
-        return Err(invalid("port pattern must not be empty"));
-    }
-    let mut matches = names.filter(|(_, n)| port_matches(pattern, n));
-    let (index, _) = matches
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no matching MIDI port"))?;
-    if matches.next().is_some() {
-        return Err(invalid("port pattern matches multiple ports"));
-    }
-    Ok(index)
-}
-pub(crate) fn port_matches(pattern: &str, name: &str) -> bool {
-    name.contains(pattern) || wildcard(pattern, name)
-}
-fn wildcard(pattern: &str, name: &str) -> bool {
-    let p: Vec<_> = pattern.chars().collect();
-    let n: Vec<_> = name.chars().collect();
-    let (mut i, mut j, mut star, mut retry) = (0, 0, None, 0);
-    while j < n.len() {
-        if i < p.len() && p[i] == '*' {
-            star = Some(i);
-            i += 1;
-            retry = j;
-        } else if let Some(next) = pattern_character(&p, i, n[j]) {
-            i = next;
-            j += 1;
-        } else if let Some(s) = star {
-            retry += 1;
-            j = retry;
-            i = s + 1;
-        } else {
-            return false;
-        }
-    }
-    while i < p.len() && p[i] == '*' {
-        i += 1;
-    }
-    i == p.len()
-}
-fn pattern_character(pattern: &[char], start: usize, value: char) -> Option<usize> {
-    let c = *pattern.get(start)?;
-    if c == '?' {
-        return Some(start + 1);
-    }
-    if c != '[' {
-        return (c == value).then_some(start + 1);
-    }
-    let mut first = start + 1;
-    let negate = pattern.get(first) == Some(&'!');
-    first += usize::from(negate);
-    let mut end = first + usize::from(pattern.get(first) == Some(&']'));
-    while end < pattern.len() && pattern[end] != ']' {
-        end += 1;
-    }
-    if end == pattern.len() {
-        return (value == '[').then_some(start + 1);
-    }
-    let mut matched = false;
-    let mut i = first;
-    while i < end {
-        if i + 2 < end && pattern[i + 1] == '-' {
-            matched |= pattern[i] <= value && value <= pattern[i + 2];
-            i += 3;
-        } else {
-            matched |= pattern[i] == value;
-            i += 1;
-        }
-    }
-    (matched != negate).then_some(end + 1)
 }
 fn nanoseconds(seconds: Rational) -> io::Result<u64> {
     seconds

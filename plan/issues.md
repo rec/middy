@@ -20,23 +20,6 @@ budget and decide how to expose capacity or rotate long recordings.
 [archive registry](../crates/middy/src/archive.rs#L165),
 [memory recorder](../crates/middy/src/recording.rs#L183))
 
-## API, diagnostics, and maintenance
-
-- **P3. Playback and port policy have overlapping owners.** The Rust output
-  module combines source normalization, scheduling, transport encoding,
-  teardown tracking, port-pattern parsing and tests. The Python client
-  module combines input, recording, output, playback and lifecycle code.
-  The shared chord planner still crosses through Python fraction conversion,
-  Rust beat values at a fixed 60 BPM, Python message conversion, and native
-  packet preparation. Python compound sends can expand the same command
-  during preparation, validation and cleanup tracking. Measure the live
-  path before optimizing and give timing and prepared-command handling
-  clearer ownership when changing these paths. File length alone is a weak
-  reason to split a module. ([Rust output](../crates/middy/src/output.rs),
-  [Python clients](../middy/_clients.py),
-  [Python note bridge](../src/messages.rs#L1360),
-  [native command validation](../src/output.rs#L206))
-
 ## Release, privacy, and remaining qualification
 
 - **P2. Published releases are the first automated cross-platform gate.**

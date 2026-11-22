@@ -1,10 +1,6 @@
 //! Shared selected-output ownership, per-device cleanup and broadcast progress.
 use super::OutputState;
-use crate::{
-    events::PortInfo,
-    messages::{AnyCommand, Command, PrimitiveMessage},
-    midi, transport,
-};
+use crate::{events::PortInfo, messages::PrimitiveMessage, midi, transport};
 use std::sync::Arc;
 
 struct Destination {
@@ -284,14 +280,9 @@ impl OutputGroup {
             Ok(())
         })
     }
-    pub fn send_command(&mut self, command: &AnyCommand) -> midi::Result<()> {
-        let packets = if self.encoding == transport::Encoding::Bytes {
-            command.expand()?
-        } else {
-            Vec::new()
-        };
+    pub fn send_byte_batch(&mut self, packets: &[Vec<u8>]) -> midi::Result<()> {
         self.broadcast(|destination| {
-            let result = destination.connection.send_command(command);
+            let result = destination.connection.send_byte_batch(packets);
             let completed = match &result {
                 Ok(()) => packets.len(),
                 Err(transport::Error::CompoundSend {
@@ -299,8 +290,8 @@ impl OutputGroup {
                 }) => completed_messages.unwrap_or(0),
                 Err(_) => 0,
             };
-            for message in packets.iter().take(completed) {
-                destination.state.feed(&message.encode()?)?;
+            for bytes in packets.iter().take(completed) {
+                destination.state.feed(bytes)?;
             }
             result.map_err(midi::Error::Send)
         })

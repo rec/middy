@@ -27,7 +27,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import _native, _units, archive, codecs, events, messages, midi
+from . import _native, _units, archive, events, messages, midi
 from ._errors import CompoundSendError
 from ._resource import ResourceModel
 from ._transport import DEFAULT_RECEIVE_BYTE_LIMIT, ReceiveQueue
@@ -676,7 +676,7 @@ class Output(_Client, frozen=True):
                 prepared = _native.prepare_output(self.encoding, resolved)
                 yield (
                     deadline,
-                    resolved if isinstance(prepared, tuple) else prepared,
+                    prepared,
                     planned.rounding_error_ns.numerator != 0,
                 )
         if pending:
@@ -747,10 +747,11 @@ class Output(_Client, frozen=True):
                         raise ValueError(
                             "untimed playback exceeds the sequence byte limit"
                         )
-                    value: object = message if isinstance(prepared, tuple) else prepared
+                    value: object = prepared
                     if members:
                         value = _MpeStep(
                             message,
+                            prepared,
                             members if index == 0 else None,
                             index + 1 == len(planned),
                         )
@@ -771,9 +772,7 @@ class Output(_Client, frozen=True):
                 remaining_bytes -= _native.prepared_size(prepared)
                 if remaining_bytes < 0:
                     raise ValueError("untimed playback exceeds the sequence byte limit")
-                timeline.append(
-                    (deadline, v if isinstance(prepared, tuple) else prepared, rounded)
-                )
+                timeline.append((deadline, prepared, rounded))
             if round(elapsed * 1_000_000_000) > 2**64 - 1:
                 raise ValueError("delay exceeds scheduler range")
             if len(timeline) > self.sequence_limit:
@@ -903,6 +902,7 @@ class _InputTransport[T]:
 
 class _MpeStep(NamedTuple):
     message: messages.Message
+    prepared: bytes | midi.UmpPacket | tuple[bytes, ...]
     start: int | None
     end: bool
 
@@ -947,24 +947,17 @@ class _OutputState:
             return
         prepared = (
             value
-            if isinstance(value, (bytes, midi.UmpPacket))
+            if isinstance(value, (bytes, midi.UmpPacket, tuple))
             else _native.prepare_output(self._encoding, value)
         )
         if isinstance(prepared, tuple):
             if self._state is None:
-                self._native.send_command(value)
+                self._native.send_byte_batch(prepared)
                 return
-            total = prepared[0]
-            packets = [
-                codecs.encode(m)
-                for m in cast(
-                    Callable[[object], list[messages.Message]], codecs.expand
-                )(value)
-            ]
             try:
-                self._native.send_command(value)
+                self._native.send_byte_batch(prepared)
             except CompoundSendError as error:
-                for p in packets[: error.completed_messages or 0]:
+                for p in prepared[: error.completed_messages or 0]:
                     self._state.feed(p)
                 raise
             except (
@@ -972,8 +965,8 @@ class _OutputState:
                 _native.WorkerTimeoutError,
                 _native.NativePanicError,
             ) as error:
-                raise CompoundSendError(str(error), None, total) from error
-            for p in packets:
+                raise CompoundSendError(str(error), None, len(prepared)) from error
+            for p in prepared:
                 self._state.feed(p)
         else:
             self._native.send(prepared)

@@ -1,13 +1,15 @@
 //! Native MIDI discovery, input, output and scoped connections.
 
 pub use crate::input::{Input, InputErrors, PortPatterns, Recording, RecordingOptions};
-#[doc(hidden)]
-pub use crate::output::{select_port_index, OutputGroup, OutputState};
 pub use crate::output::{
     Output, OutputSource, OutputValue, PlaybackOptions, DEFAULT_SEQUENCE_BYTE_LIMIT,
     DEFAULT_SEQUENCE_LIMIT,
 };
+#[doc(hidden)]
+pub use crate::output::{OutputGroup, OutputState};
 pub use crate::transport::scanner::set_scan_interval;
+#[doc(hidden)]
+pub use crate::transport::selection::select_port_index;
 pub use crate::transport::subprocess::SubprocessOptions;
 pub use crate::transport::{compiled_backends, Backend, Encoding, Port, TimestampMode};
 

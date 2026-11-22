@@ -1330,28 +1330,25 @@ pub(crate) fn schedule_notes(
     use middy::events::Rational;
     let py = value.py();
     let seconds = py.import("middy._units")?.getattr("sequence_duration")?;
-    let resolve = |value: &Py<PyAny>| -> PyResult<messages::Beats> {
+    let resolve = |value: &Py<PyAny>| -> PyResult<Rational> {
         let amount = seconds.call1((value, beat_period))?;
         let n = amount.getattr("numerator")?.extract()?;
         let d = amount.getattr("denominator")?.extract()?;
-        let rational =
-            Rational::new(n, d).map_err(|error| PyValueError::new_err(error.to_string()))?;
-        messages::Beats::try_from(rational).map_err(value_error)
+        Rational::new(n, d).map_err(|error| PyValueError::new_err(error.to_string()))
     };
     let mut remaining = limit;
-    let mut resolve_note = |note: PyRef<'_, Note>| -> PyResult<messages::Note> {
+    let mut resolve_note = |note: PyRef<'_, Note>| -> PyResult<messages::ResolvedNote> {
         remaining = remaining
             .checked_sub(note.bends.len().saturating_add(2))
             .ok_or_else(|| PyValueError::new_err("untimed playback exceeds the sequence limit"))?;
-        let mut resolved = messages::Note::new(resolve(&note.duration)?, note.note(py))
-            .and_then(|v| v.with_velocity(note.velocity(py)))
-            .map_err(value_error)?
-            .with_start(resolve(&note.start)?);
-        if let Some(channel) = note.channel(py) {
-            resolved = resolved.with_channel(channel).map_err(value_error)?;
-        }
+        let mut resolved = messages::ResolvedNote::new(
+            note.attack.borrow(py).value.clone(),
+            resolve(&note.start)?,
+            resolve(&note.duration)?,
+        )
+        .map_err(value_error)?;
         for (at, semitones) in &note.bends {
-            resolved = resolved
+            resolved
                 .bend(resolve(at)?, *semitones)
                 .map_err(value_error)?;
         }
@@ -1367,8 +1364,7 @@ pub(crate) fn schedule_notes(
     } else {
         vec![resolve_note(value.extract()?)?]
     };
-    // At 60 BPM, these already-resolved beat magnitudes are seconds.
-    let plan = messages::schedule_notes(&notes, Some(60.into()), channel, encoding.native())
+    let plan = messages::schedule_notes(&notes, channel, encoding.native())
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     if plan.events.len() > limit {
         return Err(PyValueError::new_err(

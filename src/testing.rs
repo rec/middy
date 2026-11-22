@@ -223,17 +223,9 @@ impl Output {
     }
     fn send(&mut self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let packet = crate::live::prepare_output(py, self.encoding, value)?;
-        if packet.bind(py).is_instance_of::<PyTuple>() {
-            let command = crate::messages::extract_command(value)?;
-            let packets = middy::codecs::expand(&command)
-                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-            use middy::messages::PrimitiveMessage;
-            for (index, message) in packets.iter().enumerate() {
-                if let Err(cause) = self.value.send(transport::Packet::Bytes(
-                    message
-                        .encode()
-                        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
-                )) {
+        if let Ok(packets) = packet.bind(py).cast::<PyTuple>() {
+            for (index, bytes) in packets.iter().enumerate() {
+                if let Err(cause) = self.value.send(transport::Packet::Bytes(bytes.extract()?)) {
                     return Err(error(transport::Error::CompoundSend {
                         completed_messages: Some(index),
                         total_messages: packets.len(),

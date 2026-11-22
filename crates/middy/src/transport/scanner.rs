@@ -74,7 +74,7 @@ impl Snapshot {
             patterns.is_none_or(|patterns| {
                 patterns
                     .iter()
-                    .any(|pattern| crate::output::port_matches(pattern, &p.name))
+                    .any(|pattern| super::selection::port_matches(pattern, &p.name))
             })
         }) {
             if !seen.insert(port) {

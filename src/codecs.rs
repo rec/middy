@@ -139,17 +139,20 @@ fn expand(py: Python<'_>, command: &Bound<'_, PyAny>) -> PyResult<Vec<Py<PyAny>>
         .collect()
 }
 
-pub fn prepare_command(command: &middy::messages::AnyCommand) -> PyResult<(usize, usize)> {
-    let messages = codecs::expand(command).map_err(|e| PyValueError::new_err(e.to_string()))?;
+pub fn prepare_command<'py>(
+    py: Python<'py>,
+    command: &middy::messages::AnyCommand,
+) -> PyResult<Bound<'py, pyo3::types::PyTuple>> {
     use middy::messages::PrimitiveMessage;
-    let mut bytes = 0;
-    for message in &messages {
-        bytes += message
-            .encode()
-            .map_err(|e| PyValueError::new_err(e.to_string()))?
-            .len();
-    }
-    Ok((messages.len(), bytes))
+    let packets = codecs::expand(command)
+        .and_then(|messages| {
+            messages
+                .iter()
+                .map(PrimitiveMessage::encode)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    pyo3::types::PyTuple::new(py, packets.iter().map(|bytes| PyBytes::new(py, bytes)))
 }
 
 fn items_to_python(py: Python<'_>, items: Vec<codecs::DecodeItem>) -> PyResult<Vec<Py<PyAny>>> {
