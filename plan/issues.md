@@ -137,13 +137,6 @@ budget and decide how to expose capacity or rotate long recordings.
 
 ## API, diagnostics, and maintenance
 
-- **P3. Python file errors lose their causes and error codes.** The stream
-  adapter stringifies a caller-owned stream exception, then the outer
-  conversion creates a plain `OSError` from text. Path errors also lose
-  their numeric code. This makes missing-file, permission, and interrupted
-  I/O handling depend on message text. Preserve Python causes and map native
-  error codes where available. ([File adapter](../src/files.rs#L49),
-  [conversion](../src/files.rs#L130))
 - **P3. Equivalent Rust and Python playback can round differently.** The
   Rust tuple form prepares each scalar as a separate segment and sums
   rounded nanoseconds. A Rust iterable and adjacent Python scalar values

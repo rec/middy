@@ -1,6 +1,8 @@
 """File record fidelity and bounded streaming independent of MIDI services."""
 
+from errno import EEXIST, ENOENT, ENOSPC
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 
@@ -94,7 +96,7 @@ class ShortWriter(BytesIO):
 
 class FullDisk(BytesIO):
     def write(self, data: bytes) -> int:  # ty: ignore[invalid-method-override]
-        raise OSError(28, "disk full")
+        raise OSError(ENOSPC, "disk full")
 
 
 def test_short_writes_are_completed_and_disk_failures_are_reported() -> None:
@@ -102,5 +104,31 @@ def test_short_writes_are_completed_and_disk_failures_are_reported() -> None:
     with file_io.Writer(output, format="syx") as writer:
         writer.write(messages.SysEx(data=b"\x7d"))
     assert output.getvalue() == b"\xf0\x7d\xf7"
-    with pytest.raises(OSError, match="disk full"):
+    with pytest.raises(OSError, match="disk full") as raised:
         file_io.Writer(FullDisk(), format="syx").write(messages.SysEx(data=b"\x7d"))
+    assert isinstance(raised.value.__cause__, OSError)
+    assert raised.value.__cause__.errno == ENOSPC
+
+
+def test_stream_read_error_preserves_location_and_original_exception() -> None:
+    failure = PermissionError("stream is locked")
+
+    class LockedStream(BytesIO):
+        def read(self, size: int | None = -1, /) -> bytes:
+            raise failure
+
+    with pytest.raises(OSError, match="byte 0:.*stream is locked") as raised:
+        smf.Reader(LockedStream())
+    assert raised.value.__cause__ is failure
+
+
+def test_path_errors_preserve_errno(tmp_path: Path) -> None:
+    target = tmp_path / "capture.syx"
+    with pytest.raises(FileNotFoundError) as missing:
+        file_io.Reader(target)
+    assert missing.value.errno == ENOENT
+
+    target.write_bytes(b"\xf0\xf7")
+    with pytest.raises(FileExistsError) as existing:
+        file_io.Writer(target)
+    assert existing.value.errno == EEXIST

@@ -1006,12 +1006,9 @@ impl<W: Write> Writer<W> {
             self.failed = true;
         }
         result.map_err(|e| {
-            io::Error::new(
-                e.kind(),
-                format!(
-                    "record {}, byte {}: {e}",
-                    self.registry.records, self.offset
-                ),
+            crate::file_io::at_location(
+                format!("record {}, byte {}", self.registry.records, self.offset),
+                e,
             )
         })
     }
@@ -1120,15 +1117,16 @@ impl<R: Read> Iterator for Reader<R> {
             Ok(v) => v.map(Ok),
             Err(e) => {
                 self.stopped = true;
-                let message = format!(
-                    "record {}, byte {}: {e}",
+                let location = format!(
+                    "record {}, byte {}",
                     self.registry.records, self.source.offset
                 );
-                self.problem = Some(message.clone());
+                let error = crate::file_io::at_location(location, e);
+                self.problem = Some(error.to_string());
                 if self.recover {
                     None
                 } else {
-                    Some(Err(io::Error::new(e.kind(), message)))
+                    Some(Err(error))
                 }
             }
         }

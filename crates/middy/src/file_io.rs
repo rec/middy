@@ -29,6 +29,28 @@ pub fn invalid(offset: u64, reason: impl std::fmt::Display) -> io::Error {
         format!("byte {offset}: {reason}"),
     )
 }
+
+#[derive(Debug)]
+struct ContextError {
+    location: String,
+    error: io::Error,
+}
+
+impl std::fmt::Display for ContextError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}: {}", self.location, self.error)
+    }
+}
+
+impl std::error::Error for ContextError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
+pub(crate) fn at_location(location: String, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), ContextError { location, error })
+}
 pub struct Source<R> {
     pub inner: R,
     pub offset: u64,
@@ -58,12 +80,7 @@ impl<R: Read> Source<R> {
                     return Ok(Some(b[0]));
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(e) => {
-                    return Err(io::Error::new(
-                        e.kind(),
-                        format!("byte {}: {e}", self.offset),
-                    ))
-                }
+                Err(e) => return Err(at_location(format!("byte {}", self.offset), e)),
             }
         }
     }
@@ -81,12 +98,7 @@ impl<R: Read> Source<R> {
                     b = &mut b[n..];
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => {
-                    return Err(io::Error::new(
-                        e.kind(),
-                        format!("byte {}: {e}", self.offset),
-                    ))
-                }
+                Err(e) => return Err(at_location(format!("byte {}", self.offset), e)),
             }
         }
         Ok(())

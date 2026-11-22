@@ -47,7 +47,7 @@ impl Stream {
     }
 }
 fn stream_error(e: PyErr) -> io::Error {
-    io::Error::other(e.to_string())
+    io::Error::other(e)
 }
 impl Read for Stream {
     fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
@@ -128,6 +128,34 @@ impl Seek for Stream {
     }
 }
 pub fn os_error(e: io::Error) -> PyErr {
+    let mut cause: &(dyn std::error::Error + 'static) = &e;
+    loop {
+        if let Some(io) = cause.downcast_ref::<io::Error>() {
+            if let Some(code) = io.raw_os_error() {
+                #[cfg(unix)]
+                return PyOSError::new_err((code, e.to_string()));
+                #[cfg(windows)]
+                return PyOSError::new_err((0, e.to_string(), None::<String>, code));
+                #[cfg(not(any(unix, windows)))]
+                return PyErr::from(io::Error::from_raw_os_error(code));
+            }
+            if let Some(inner) = io.get_ref() {
+                cause = inner;
+                continue;
+            }
+        }
+        if let Some(error) = cause.downcast_ref::<PyErr>() {
+            return Python::attach(|py| {
+                let reported = PyOSError::new_err(e.to_string());
+                reported.set_cause(py, Some(error.clone_ref(py)));
+                reported
+            });
+        }
+        match cause.source() {
+            Some(source) => cause = source,
+            None => break,
+        }
+    }
     PyOSError::new_err(e.to_string())
 }
 pub fn bytes(value: &Bound<'_, PyAny>, limit: usize) -> PyResult<Vec<u8>> {
