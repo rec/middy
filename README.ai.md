@@ -232,6 +232,14 @@ format. With overwrite enabled, the completed file replaces the destination
 after a successful write. A SYX backup must select at least one SysEx message.
 Rust uses
 `write(recording, "rec.middy", false)` for the same operation.
+
+Review recordings and diagnostic artifacts before sharing them. A `.middy`
+archive can contain device names, connection and backend identifiers, and
+performance timings. SysEx payloads can contain instrument settings and other
+manufacturer-specific data. Use a short synthetic capture when filing a public
+bug report. Share a restorable hardware dump privately when its original bytes
+are needed for diagnosis.
+
 For explicit control without closing the input:
 
 ```python
@@ -630,8 +638,9 @@ master fine/coarse tuning. `middy.timecode` provides full-frame MTC values with
 an explicit rate code and broadcast device ID 127, plus explicit quarter-frame
 assembly and SMPTE position arithmetic. Their `decode(SysEx)` functions interpret
 complete messages explicitly; the byte decoder continues to return raw SysEx.
-MPE support configures one zone at a time and offers explicit allocation and
-overlap-aware tracking; it does not configure bend ranges or infer release tails.
+Explicit MPE helpers configure one zone at a time and offer allocation and
+overlap-aware tracking. Authored notes with per-note bends configure a lower zone
+and its member pitch-bend ranges automatically for playback.
 Named RPN helpers keep pitch-bend
 cents, fine-tuning units and GM2 modulation-depth units distinct. Channel-mode
 helpers construct ordinary CC values. All Notes Off can leave sustained sound;

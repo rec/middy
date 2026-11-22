@@ -1318,14 +1318,29 @@ impl Note {
         self.attack.borrow(py).channel().map(i64::from)
     }
     fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
-        Ok(format!(
-            "Note(duration={}, note={}, velocity={}, channel={})",
+        use std::fmt::Write as _;
+        let mut representation = format!(
+            "Note(duration={}, note={}, velocity={}, channel={}",
             self.duration.bind(py).repr()?,
             self.note(py),
             self.velocity(py),
             self.channel(py)
                 .map_or_else(|| "None".into(), |v| v.to_string())
-        ))
+        );
+        if !self.start.bind(py).eq(0)? {
+            write!(representation, ", start={}", self.start.bind(py).repr()?)
+                .expect("writing to a String succeeds");
+        }
+        representation.push(')');
+        for (at, semitones) in &self.bends {
+            write!(
+                representation,
+                ".bend(at={}, semitones={semitones:?})",
+                at.bind(py).repr()?
+            )
+            .expect("writing to a String succeeds");
+        }
+        Ok(representation)
     }
 }
 

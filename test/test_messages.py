@@ -318,6 +318,11 @@ def test_full_notes_delegate_midi_validation_and_keep_authored_duration() -> Non
         None,
     )
     assert messages.Rest("1 beat").duration == "1 beat"
+    expressive = messages.Note(2, 64, start="20 ms").bend(at=1, semitones=2)
+    assert repr(expressive) == (
+        "Note(duration=2, note=64, velocity=90, channel=None, start='20 ms')"
+        ".bend(at=1, semitones=2.0)"
+    )
     for duration in [-1, float("inf"), float("nan"), True, "1 Hz", "-1 beat"]:
         with pytest.raises((ValueError, TypeError)):
             messages.Note(duration, 60)

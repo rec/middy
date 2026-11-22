@@ -65,13 +65,6 @@ budget and decide how to expose capacity or rotate long recordings.
 
 ## API, diagnostics, and maintenance
 
-- **P3. The note representation and MPE reference omit expressive behavior.**
-  The MPE reference describes explicit setup only
-  and says bend ranges are never configured. Python `repr(Note)` omits
-  both start offsets and bends, so plain and expressive notes can look
-  identical in logs. Update the contracts and make the authored timing and
-  expression inspectable. ([MPE reference](../README.ai.md#L631),
-  [note representation](../src/messages.rs#L1320))
 - **P3. Playback and port policy have overlapping owners.** The Rust output
   module combines source normalization, scheduling, transport encoding,
   teardown tracking, port-pattern parsing and tests. The Python client
@@ -103,15 +96,6 @@ budget and decide how to expose capacity or rotate long recordings.
   [wheel install and test list](../.github/workflows/ci.yml#L138),
   [package metadata](../pyproject.toml#L5),
   [development source](../pyproject.toml#L43))
-- **P3. Shared captures can disclose device and performance information.**
-  `.middy` archives include device names, backend IDs and connection
-  identities. Timestamped performances and opaque SysEx can also contain
-  material that users intend to keep private, including instrument settings.
-  There is no general way to redact arbitrary manufacturer payloads while
-  preserving a restorable backup. Document what to review before attaching
-  a capture to a public issue or sharing qualification artifacts.
-  ([Port serialization](../crates/middy/src/archive.rs#L311),
-  [SysEx backup example](../doc/examples.md#L163))
 - **Native resource and lifetime evidence remains open.** Failed in-process
   disposal deliberately retains state and consumes one of the 32 native
   client slots because freeing state that a driver can still reach would be
