@@ -4,25 +4,7 @@ Source audit of `70633cf` on 2026-11-22. The findings below describe code
 paths and give scenarios for regression tests. Driver-dependent outcomes and
 release readiness still need the evidence listed at the end.
 
-## Reliability and data integrity
-
-### P2. Reconnect churn can exhaust a recording's archive descriptor budget
-
-An attached recorder declares each new stream and clock, while the archive
-allows 128 descriptors across both categories for its entire lifetime.
-Followed input creates new identities on reconnection. A long-running
-session with only a few devices can hit this limit even when its queue is
-empty and disk space is ample. Memory recording accumulates records outside
-the file writer's registry, so the same limit can surface only when saving
-the result. Test repeated connection generations against the archive
-budget and decide how to expose capacity or rotate long recordings.
-File recording now preserves an incomplete trailer with the descriptor failure
-reason so archive recovery can report the cause alongside the verified prefix.
-([Recording declarations](../crates/middy/src/input_recording.rs#L111),
-[archive registry](../crates/middy/src/archive.rs#L165),
-[memory recorder](../crates/middy/src/recording.rs#L183))
-
-## Release, privacy, and remaining qualification
+## Release and remaining qualification
 
 - **P2. Verify a release candidate and its public dependency contract.**
   Candidate CI supports pull requests and manual runs, checks installed
@@ -32,10 +14,14 @@ reason so archive recovery can report the cause alongside the verified prefix.
   checks. The index-only install chose uFor 0.1.0, which rejected the current
   `FrequencyTable(frequencies=...)` API. Public distribution still requires
   a passing `check_index` run.
+  The checkout and candidate CI already use the uFor commit in `uv.lock`.
+  The PyPI wheel resolves its published dependency by name. PyPI rejects a
+  Git URL in the wheel's dependency metadata.
   ([Candidate run](https://github.com/rec/middy/actions/runs/45019531170),
   [Workflow](../.github/workflows/ci.yml),
   [tuning integration](../middy/tuning.py),
-  [development source](../pyproject.toml#L43))
+  [development source](../pyproject.toml#L43),
+  [PyPI metadata validation](https://github.com/pypi/warehouse/blob/main/warehouse/forklift/metadata.py))
 - **Native resource and lifetime evidence remains open.** Failed in-process
   disposal deliberately retains state and consumes one of the 32 native
   client slots because freeing state that a driver can still reach would be

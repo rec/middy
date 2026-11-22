@@ -114,6 +114,7 @@ pub struct RecordingOptions {
     pub label: String,
     pub best_effort: bool,
     pub payload_limit: usize,
+    pub descriptor_limit: usize,
     pub record_limit: usize,
     pub byte_limit: usize,
     pub metrics: bool,
@@ -124,6 +125,7 @@ impl Default for RecordingOptions {
             label: String::new(),
             best_effort: false,
             payload_limit: 1_048_576,
+            descriptor_limit: crate::archive::DEFAULT_DESCRIPTOR_LIMIT,
             record_limit: 128,
             byte_limit: 8_388_608,
             metrics: false,
@@ -221,10 +223,15 @@ impl Input<Payload> {
             },
         ];
         let recorder = Arc::new(if let Some(path) = path {
+            let limits = crate::archive::Limits {
+                payload_limit: options.payload_limit,
+                descriptor_limit: options.descriptor_limit,
+            }
+            .validate()?;
             Recorder::new(
                 std::fs::File::create(path)?,
                 descriptors,
-                options.payload_limit,
+                limits,
                 options.record_limit,
                 options.byte_limit,
                 options.best_effort,

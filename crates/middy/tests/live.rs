@@ -359,7 +359,10 @@ fn recording_reports_descriptor_exhaustion_in_its_incomplete_trailer() {
                 clock_identity: None,
             },
         ],
-        1024,
+        archive::Limits {
+            payload_limit: 1024,
+            descriptor_limit: 128,
+        },
         256,
         8192,
         false,

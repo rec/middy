@@ -49,9 +49,18 @@ are rejected. A stream clock association must name an already declared clock;
 its timed events/metadata must use that descriptor. The association remains
 meaningful when timestamp capture is off. Metadata may be global, stream-scoped,
 timed or explicitly untimed; a tempo change therefore need not borrow the time
-of an adjacent musical event. The initial implementation admits at most 128 descriptors and
-8 MiB total descriptor string bytes, independent of the per-record limit.
-A long-running capture that exhausts these bounds must start another archive.
+of an adjacent musical event. The default limit is 4,096 clock and stream
+descriptors combined per archive. Python accepts `descriptor_limit` on
+`Reader`, `Writer`, `write`, and file-backed `Input.start` and
+`archive.Recorder`. In Rust, pass `archive::Limits` to the reader, writer,
+or recorder constructor, set `file_io::WriteOptions::descriptor_limit` for
+`write`, or set `RecordingOptions::descriptor_limit` when starting an input
+recording. Set the reader's limit high enough for the archive you write.
+
+The archive wire format is unchanged. Earlier middy readers reject files with
+more than 128 descriptors. Set the writer's limit to 128 when you need to
+exchange files with those readers. The 8 MiB cumulative descriptor string
+budget and the per-record payload limit still apply.
 
 ## Message representations
 

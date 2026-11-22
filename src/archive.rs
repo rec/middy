@@ -161,10 +161,11 @@ struct Reader {
 #[pymethods]
 impl Reader {
     #[new]
-    #[pyo3(signature=(source,*,payload_limit=1_048_576,recover=false,preserve_unknown=false))]
+    #[pyo3(signature=(source,*,payload_limit=1_048_576,descriptor_limit=model::DEFAULT_DESCRIPTOR_LIMIT,recover=false,preserve_unknown=false))]
     fn new(
         source: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
+        #[pyo3(from_py_with=crate::files::limit)] descriptor_limit: usize,
         #[pyo3(from_py_with=crate::ump::boolean)] recover: bool,
         #[pyo3(from_py_with=crate::ump::boolean)] preserve_unknown: bool,
     ) -> PyResult<Self> {
@@ -174,7 +175,10 @@ impl Reader {
             value: Some(
                 model::Reader::new(
                     IoStream::input(source)?,
-                    payload_limit,
+                    model::Limits {
+                        payload_limit,
+                        descriptor_limit,
+                    },
                     recover,
                     preserve_unknown,
                 )
@@ -214,15 +218,22 @@ struct Writer {
 #[pymethods]
 impl Writer {
     #[new]
-    #[pyo3(signature=(destination,*,payload_limit=1_048_576))]
+    #[pyo3(signature=(destination,*,payload_limit=1_048_576,descriptor_limit=model::DEFAULT_DESCRIPTOR_LIMIT))]
     fn new(
         destination: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
+        #[pyo3(from_py_with=crate::files::limit)] descriptor_limit: usize,
     ) -> PyResult<Self> {
         Ok(Self {
             value: Some(
-                model::Writer::new(IoStream::output(destination)?, payload_limit)
-                    .map_err(os_error)?,
+                model::Writer::new(
+                    IoStream::output(destination)?,
+                    model::Limits {
+                        payload_limit,
+                        descriptor_limit,
+                    },
+                )
+                .map_err(os_error)?,
             ),
         })
     }

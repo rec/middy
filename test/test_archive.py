@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import middy
 from middy import archive, events, messages, midi, mpe
 
 
@@ -99,6 +100,23 @@ def test_rejected_record_allows_only_an_incomplete_trailer() -> None:
     assert list(reader) == [stream]
     assert not reader.complete
     assert "incomplete capture: duplicate stream" in str(reader.problem)
+
+
+def test_descriptor_count_can_exceed_the_old_limit_in_one_file(tmp_path: Path) -> None:
+    path = tmp_path / "long.middy"
+    records = [archive.Stream(id=str(n), label="Keyboard") for n in range(130)]
+    middy.write(records, path)
+    with middy.Reader(path) as reader:
+        assert list(reader) == records
+        assert reader.complete
+    with (
+        middy.Reader(path, descriptor_limit=129) as reader,
+        pytest.raises(OSError, match=r"descriptor count limit \(129\)"),
+    ):
+        list(reader)
+    with pytest.raises(OSError, match=r"descriptor count limit \(129\)"):
+        middy.write(records, path, overwrite=True, descriptor_limit=129)
+    assert list(archive.Reader(path, descriptor_limit=130)) == records
 
 
 def test_partial_frame_io_failure_prevents_even_an_incomplete_trailer() -> None:

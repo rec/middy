@@ -237,6 +237,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](ResourceModel):
         label: str = "",
         best_effort: bool = False,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
         record_limit: int = 128,
         byte_limit: int | str = 8_388_608,
         metrics: bool = False,

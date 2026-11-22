@@ -71,6 +71,7 @@ class Reader:
         source: str | PathLike[str] | BinaryIO,
         *,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
         recover: bool = False,
         preserve_unknown: bool = False,
     ) -> None: ...
@@ -108,6 +109,7 @@ class Writer:
         destination: str | PathLike[str] | BinaryIO,
         *,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
     ) -> None: ...
     def write(
         self,
@@ -163,6 +165,7 @@ class Recorder:
         label: str = "",
         best_effort: bool = False,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
         record_limit: int = 128,
         byte_limit: int | str = 8_388_608,
         metrics: bool = False,

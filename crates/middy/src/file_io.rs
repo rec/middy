@@ -1,4 +1,5 @@
 //! Bounded file I/O with byte locations. No native MIDI initialization.
+use crate::archive::{Limits, DEFAULT_DESCRIPTOR_LIMIT};
 use crate::messages::{Message, PrimitiveMessage};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +7,28 @@ use std::path::{Path, PathBuf};
 pub(crate) mod syx;
 
 pub const DEFAULT_LIMIT: usize = 1_048_576;
+
+/// Options for writing a complete file. The descriptor limit applies to middy archives.
+#[derive(Clone, Copy, Debug)]
+pub struct WriteOptions {
+    pub overwrite: bool,
+    pub descriptor_limit: usize,
+}
+
+impl Default for WriteOptions {
+    fn default() -> Self {
+        Self::from(false)
+    }
+}
+
+impl From<bool> for WriteOptions {
+    fn from(overwrite: bool) -> Self {
+        Self {
+            overwrite,
+            descriptor_limit: DEFAULT_DESCRIPTOR_LIMIT,
+        }
+    }
+}
 
 /// Write a fallible record stream, choosing the format from the filename.
 /// With overwrite enabled, replace the destination only after successful completion.
@@ -15,11 +38,11 @@ pub const DEFAULT_LIMIT: usize = 1_048_576;
 pub fn write<T: WriteRecord>(
     records: impl IntoIterator<Item = io::Result<T>>,
     filename: impl AsRef<std::path::Path>,
-    overwrite: bool,
+    options: impl Into<WriteOptions>,
 ) -> io::Result<()> {
     write_file(
         filename.as_ref(),
-        overwrite,
+        options.into(),
         |error| error,
         |writer| {
             for record in records {
@@ -34,14 +57,20 @@ pub fn write<T: WriteRecord>(
 #[doc(hidden)]
 pub fn write_file<E>(
     path: &Path,
-    overwrite: bool,
+    options: WriteOptions,
     map_error: impl Fn(io::Error) -> E,
     fill: impl FnOnce(&mut Writer) -> Result<(), E>,
 ) -> Result<(), E> {
     let path = std::path::absolute(path).map_err(&map_error)?;
     let extension = path_extension(&path);
     validate_extension(extension).map_err(&map_error)?;
-    let (file, pending) = if overwrite {
+    let limits = Limits {
+        payload_limit: DEFAULT_LIMIT,
+        descriptor_limit: options.descriptor_limit,
+    }
+    .validate()
+    .map_err(&map_error)?;
+    let (file, pending) = if options.overwrite {
         let (file, pending) = PendingFile::new(&path).map_err(&map_error)?;
         (file, Some(pending))
     } else {
@@ -54,7 +83,7 @@ pub fn write_file<E>(
             None,
         )
     };
-    let mut writer = Writer::new(file, extension, DEFAULT_LIMIT).map_err(&map_error)?;
+    let mut writer = Writer::new(file, extension, limits).map_err(&map_error)?;
     fill(&mut writer)?;
     if extension.eq_ignore_ascii_case("syx") && !writer.sysex_written {
         return Err(map_error(invalid(
@@ -275,13 +304,12 @@ impl Reader {
 impl<R: Read> Reader<R> {
     pub fn new(
         mut inner: R,
-        limit: usize,
+        limits: impl Into<Limits>,
         recover: bool,
         preserve_unknown: bool,
     ) -> io::Result<Self> {
-        if limit == 0 {
-            return Err(invalid(0, "payload limit must be positive"));
-        }
+        let limits = limits.into().validate()?;
+        let limit = limits.payload_limit;
         let mut prefix = Vec::new();
         (&mut inner).take(1).read_to_end(&mut prefix)?;
         let syx = prefix.is_empty() || prefix[0] == 240;
@@ -321,7 +349,7 @@ impl<R: Read> Reader<R> {
             (
                 Input::Archive(crate::archive::Reader::new(
                     inner,
-                    limit,
+                    limits,
                     recover,
                     preserve_unknown,
                 )?),
@@ -575,13 +603,11 @@ fn validate_extension(extension: &str) -> io::Result<()> {
 }
 impl<W: Write + std::io::Seek> Writer<W> {
     /// For streams, specify the same extension used by a filename destination.
-    pub fn new(inner: W, extension: &str, limit: usize) -> io::Result<Self> {
+    pub fn new(inner: W, extension: &str, limits: impl Into<Limits>) -> io::Result<Self> {
         validate_extension(extension)?;
-        if limit == 0 {
-            return Err(invalid(0, "payload limit must be positive"));
-        }
+        let limits = limits.into().validate()?;
         let output = if extension.eq_ignore_ascii_case("middy") {
-            Output::Archive(crate::archive::Writer::new(inner, limit)?)
+            Output::Archive(crate::archive::Writer::new(inner, limits)?)
         } else if extension.eq_ignore_ascii_case("syx") {
             Output::Syx(inner)
         } else {
@@ -589,7 +615,7 @@ impl<W: Write + std::io::Seek> Writer<W> {
         };
         Ok(Self {
             output: Some(output),
-            limit,
+            limit: limits.payload_limit,
             sysex_written: false,
         })
     }

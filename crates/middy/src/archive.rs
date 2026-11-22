@@ -8,6 +8,44 @@ use crate::ump::{self, UmpValue};
 use std::collections::BTreeMap;
 use std::io::{self, Cursor, Read, Write};
 pub const MAGIC: &[u8; 12] = b"MIDDY\0\r\n\0\x02\0\0";
+pub const DEFAULT_DESCRIPTOR_LIMIT: usize = 4_096;
+
+/// Per-record payload bytes and total clock and stream declarations per archive.
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub payload_limit: usize,
+    pub descriptor_limit: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self::from(crate::file_io::DEFAULT_LIMIT)
+    }
+}
+
+impl From<usize> for Limits {
+    fn from(payload_limit: usize) -> Self {
+        Self {
+            payload_limit,
+            descriptor_limit: DEFAULT_DESCRIPTOR_LIMIT,
+        }
+    }
+}
+
+impl Limits {
+    pub(crate) fn validate(self) -> io::Result<Self> {
+        if self.payload_limit == 0 {
+            return Err(invalid(0, "payload limit must be positive"));
+        }
+        if self.descriptor_limit == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "descriptor limit must be positive",
+            ));
+        }
+        Ok(self)
+    }
+}
 #[derive(Clone, Debug)]
 pub enum Record {
     Clock(Clock),
@@ -133,8 +171,23 @@ struct Registry {
     streams: BTreeMap<std::sync::Arc<str>, (String, Option<String>)>,
     bytes: usize,
     records: u64,
+    descriptor_limit: usize,
 }
 impl Registry {
+    fn reserve_descriptor(&mut self, bytes: usize) -> io::Result<()> {
+        if self.clocks.len() + self.streams.len() >= self.descriptor_limit {
+            return Err(invalid(
+                0,
+                format_args!("descriptor count limit ({})", self.descriptor_limit),
+            ));
+        }
+        if bytes > 8_388_608usize.saturating_sub(self.bytes) {
+            return Err(invalid(0, "descriptor byte limit"));
+        }
+        self.bytes += bytes;
+        Ok(())
+    }
+
     fn check_event_header(
         &self,
         stream: &str,
@@ -175,14 +228,7 @@ impl Registry {
                 if self.clocks.contains_key(c.identity()) {
                     return Err(invalid(0, "duplicate clock descriptor"));
                 }
-                if self.clocks.len() + self.streams.len() >= 128 {
-                    return Err(invalid(0, "descriptor count limit (128)"));
-                }
-                let n = c.identity().len() + c.origin().len();
-                if n > 8_388_608usize.saturating_sub(self.bytes) {
-                    return Err(invalid(0, "descriptor byte limit"));
-                }
-                self.bytes += n;
+                self.reserve_descriptor(c.identity().len() + c.origin().len())?;
                 self.clocks.insert(c.identity().into(), c.clone());
             }
             Record::Stream {
@@ -193,9 +239,6 @@ impl Registry {
                 if id.is_empty() || self.streams.contains_key(id.as_str()) {
                     return Err(invalid(0, "invalid/duplicate stream descriptor"));
                 }
-                if self.clocks.len() + self.streams.len() >= 128 {
-                    return Err(invalid(0, "descriptor count limit (128)"));
-                }
                 if clock_identity
                     .as_ref()
                     .is_some_and(|id| !self.clocks.contains_key(id))
@@ -203,10 +246,7 @@ impl Registry {
                     return Err(invalid(0, "stream clock is undeclared"));
                 }
                 let n = id.len() + label.len() + clock_identity.as_ref().map_or(0, |id| id.len());
-                if n > 8_388_608usize.saturating_sub(self.bytes) {
-                    return Err(invalid(0, "descriptor byte limit"));
-                }
-                self.bytes += n;
+                self.reserve_descriptor(n)?;
                 self.streams
                     .insert(id.as_str().into(), (label.clone(), clock_identity.clone()));
             }
@@ -954,15 +994,16 @@ enum WriterState {
     Closed,
 }
 impl<W: Write> Writer<W> {
-    pub fn new(mut inner: W, limit: usize) -> io::Result<Self> {
-        if limit == 0 {
-            return Err(invalid(0, "limit must be positive"));
-        }
+    pub fn new(mut inner: W, limits: impl Into<Limits>) -> io::Result<Self> {
+        let limits = limits.into().validate()?;
         inner.write_all(MAGIC)?;
         Ok(Self {
             inner,
-            registry: Registry::default(),
-            limit,
+            registry: Registry {
+                descriptor_limit: limits.descriptor_limit,
+                ..Registry::default()
+            },
+            limit: limits.payload_limit,
             offset: 12,
             state: WriterState::Open,
         })
@@ -1052,14 +1093,23 @@ impl Reader<std::io::BufReader<std::fs::File>> {
     }
 }
 impl<R: Read> Reader<R> {
-    pub fn new(inner: R, limit: usize, recover: bool, preserve: bool) -> io::Result<Self> {
-        let mut source = Source::new(inner, limit)?;
+    pub fn new(
+        inner: R,
+        limits: impl Into<Limits>,
+        recover: bool,
+        preserve: bool,
+    ) -> io::Result<Self> {
+        let limits = limits.into().validate()?;
+        let mut source = Source::new(inner, limits.payload_limit)?;
         if source.array::<12>()? != *MAGIC {
             return Err(invalid(0, "invalid archive magic/version"));
         }
         Ok(Self {
             source,
-            registry: Registry::default(),
+            registry: Registry {
+                descriptor_limit: limits.descriptor_limit,
+                ..Registry::default()
+            },
             recover,
             preserve,
             stopped: false,

@@ -87,16 +87,17 @@ impl Recorder {
     pub fn new(
         writer: impl Write + Send + 'static,
         descriptors: Vec<Record>,
-        payload_limit: usize,
+        limits: impl Into<archive::Limits>,
         record_limit: usize,
         byte_limit: usize,
         best_effort: bool,
         collect_metrics: bool,
     ) -> io::Result<Self> {
-        if record_limit == 0 || byte_limit == 0 || payload_limit == 0 {
+        let limits = limits.into().validate()?;
+        if record_limit == 0 || byte_limit == 0 {
             return Err(invalid(0, "recording limits must be positive"));
         }
-        let mut writer = archive::Writer::new(writer, payload_limit)?;
+        let mut writer = archive::Writer::new(writer, limits)?;
         for d in &descriptors {
             if !matches!(d, Record::Clock(_) | Record::Stream { .. }) {
                 return Err(invalid(
@@ -176,7 +177,7 @@ impl Recorder {
             sender: Some(sender),
             record_limit,
             byte_limit,
-            payload_limit,
+            payload_limit: limits.payload_limit,
             best_effort,
         })
     }

@@ -298,3 +298,39 @@ fn parameter_steps_keep_the_existing_archive_ids_and_fields() {
         );
     }
 }
+#[test]
+fn archive_descriptor_limit_can_be_raised_on_both_sides() {
+    let descriptor_limit = archive::DEFAULT_DESCRIPTOR_LIMIT + 1;
+    let limits = archive::Limits {
+        descriptor_limit,
+        ..Default::default()
+    };
+    let mut bytes = Cursor::new(Vec::new());
+    let mut writer = middy::Writer::new(&mut bytes, "middy", limits).unwrap();
+    for index in 0..descriptor_limit {
+        writer
+            .write(&Record::Stream {
+                id: index.to_string(),
+                label: String::new(),
+                clock_identity: None,
+            })
+            .unwrap();
+    }
+    writer.finish().unwrap();
+    let bytes = bytes.into_inner();
+    let mut reader = middy::Reader::new(&bytes[..], limits, false, false).unwrap();
+    assert_eq!(
+        reader
+            .by_ref()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap()
+            .len(),
+        descriptor_limit
+    );
+    assert!(reader.complete());
+    let error = archive::Reader::new(&bytes[..], archive::Limits::default(), false, false)
+        .unwrap()
+        .collect::<io::Result<Vec<_>>>()
+        .unwrap_err();
+    assert!(error.to_string().contains("descriptor count limit (4096)"));
+}

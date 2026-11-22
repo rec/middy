@@ -1,5 +1,6 @@
 //! Unified file API; format detection, validation and transformation stay in Rust.
 use crate::files::{closed, os_error, Stream};
+use middy::archive::{Limits, DEFAULT_DESCRIPTOR_LIMIT};
 use middy::file_io as model;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -157,10 +158,11 @@ fn sequence_index(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<u16>> {
 #[pymethods]
 impl Reader {
     #[new]
-    #[pyo3(signature=(source,*,payload_limit=1_048_576,recover=false,preserve_unknown=false))]
+    #[pyo3(signature=(source,*,payload_limit=1_048_576,descriptor_limit=DEFAULT_DESCRIPTOR_LIMIT,recover=false,preserve_unknown=false))]
     fn new(
         source: &Bound<'_, PyAny>,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
+        #[pyo3(from_py_with=crate::files::limit)] descriptor_limit: usize,
         #[pyo3(from_py_with=crate::ump::boolean)] recover: bool,
         #[pyo3(from_py_with=crate::ump::boolean)] preserve_unknown: bool,
     ) -> PyResult<Self> {
@@ -168,7 +170,10 @@ impl Reader {
             value: Some(ReaderState::Records(Box::new(
                 model::Reader::new(
                     Stream::input(source)?,
-                    payload_limit,
+                    Limits {
+                        payload_limit,
+                        descriptor_limit,
+                    },
                     recover,
                     preserve_unknown,
                 )
@@ -273,7 +278,7 @@ impl Writer {
     fn open(
         destination: &Bound<'_, PyAny>,
         format: Option<&str>,
-        payload_limit: usize,
+        limits: Limits,
     ) -> PyResult<Self> {
         let extension = if destination.hasattr("write")? {
             format.unwrap_or("middy").to_ascii_lowercase()
@@ -294,17 +299,13 @@ impl Writer {
                 "expected .mid, .midi, .syx or .middy destination",
             ));
         }
-        if payload_limit == 0 {
+        if limits.payload_limit == 0 {
             return Err(PyValueError::new_err("payload limit must be positive"));
         }
         Ok(Self {
             value: Some(
-                model::Writer::new(
-                    Stream::exclusive_output(destination)?,
-                    &extension,
-                    payload_limit,
-                )
-                .map_err(os_error)?,
+                model::Writer::new(Stream::exclusive_output(destination)?, &extension, limits)
+                    .map_err(os_error)?,
             ),
         })
     }
@@ -312,13 +313,21 @@ impl Writer {
 #[pymethods]
 impl Writer {
     #[new]
-    #[pyo3(signature=(destination,*,format=None,payload_limit=1_048_576))]
+    #[pyo3(signature=(destination,*,format=None,payload_limit=1_048_576,descriptor_limit=DEFAULT_DESCRIPTOR_LIMIT))]
     fn new(
         destination: &Bound<'_, PyAny>,
         format: Option<&str>,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
+        #[pyo3(from_py_with=crate::files::limit)] descriptor_limit: usize,
     ) -> PyResult<Self> {
-        Self::open(destination, format, payload_limit)
+        Self::open(
+            destination,
+            format,
+            Limits {
+                payload_limit,
+                descriptor_limit,
+            },
+        )
     }
     fn write(&mut self, py: Python<'_>, record: &Bound<'_, PyAny>) -> PyResult<()> {
         let record = record_value(record)?;
@@ -400,17 +409,21 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 /// SYX output selects SysEx messages, discards timing and other MIDI traffic,
 /// and rejects empty selections, recorded gaps and discontinuities.
 #[pyfunction]
-#[pyo3(signature=(records,filename,overwrite=false))]
+#[pyo3(signature=(records,filename,overwrite=false,*,descriptor_limit=DEFAULT_DESCRIPTOR_LIMIT))]
 fn write(
     py: Python<'_>,
     records: &Bound<'_, PyAny>,
     filename: PathBuf,
     #[pyo3(from_py_with=crate::ump::boolean)] overwrite: bool,
+    #[pyo3(from_py_with=crate::files::limit)] descriptor_limit: usize,
 ) -> PyResult<()> {
     let records = records.try_iter()?;
     model::write_file(
         &filename,
-        overwrite,
+        model::WriteOptions {
+            overwrite,
+            descriptor_limit,
+        },
         |error| {
             if error.kind() == std::io::ErrorKind::InvalidInput && error.raw_os_error().is_none() {
                 PyValueError::new_err(error.to_string())

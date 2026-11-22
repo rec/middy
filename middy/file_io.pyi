@@ -26,6 +26,8 @@ def write(
     ],
     filename: str | PathLike[str],
     overwrite: bool = False,
+    *,
+    descriptor_limit: int = 4_096,
 ) -> None:
     """Write records to a path. Overwrite replaces it after successful completion.
 
@@ -43,6 +45,7 @@ class Reader:
         source: str | PathLike[str] | BinaryIO,
         *,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
         recover: bool = False,
         preserve_unknown: bool = False,
     ) -> None: ...
@@ -126,6 +129,7 @@ class Writer:
         *,
         format: Literal["mid", "midi", "syx", "middy"] | None = None,
         payload_limit: int | str = 1_048_576,
+        descriptor_limit: int = 4_096,
     ) -> None: ...
     def write(
         self,

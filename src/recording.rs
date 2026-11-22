@@ -46,7 +46,7 @@ pub struct Recorder {
 #[pymethods]
 impl Recorder {
     #[new]
-    #[pyo3(signature=(destination=None,*,clock,stream,label="",best_effort=false,payload_limit=1_048_576,record_limit=128,byte_limit=8_388_608,metrics=false))]
+    #[pyo3(signature=(destination=None,*,clock,stream,label="",best_effort=false,payload_limit=1_048_576,descriptor_limit=middy::archive::DEFAULT_DESCRIPTOR_LIMIT,record_limit=128,byte_limit=8_388_608,metrics=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -56,6 +56,7 @@ impl Recorder {
         label: &str,
         #[pyo3(from_py_with=crate::ump::boolean)] best_effort: bool,
         #[pyo3(from_py_with=crate::units::bytes)] payload_limit: usize,
+        #[pyo3(from_py_with=limit)] descriptor_limit: usize,
         #[pyo3(from_py_with=limit)] record_limit: usize,
         #[pyo3(from_py_with=crate::units::bytes)] byte_limit: usize,
         #[pyo3(from_py_with=crate::ump::boolean)] metrics: bool,
@@ -77,7 +78,10 @@ impl Recorder {
                 model::Recorder::new(
                     File::create(destination)?,
                     descriptors,
-                    payload_limit,
+                    middy::archive::Limits {
+                        payload_limit,
+                        descriptor_limit,
+                    },
                     record_limit,
                     byte_limit,
                     best_effort,

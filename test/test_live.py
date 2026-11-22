@@ -762,6 +762,20 @@ def test_channel_selection_applies_to_callbacks_and_recordings(
         reader.close()
 
 
+def test_input_start_sets_the_archive_descriptor_limit(
+    iterable_input: list[Callable[[events.ReceivedPacket], object]], tmp_path: Path
+) -> None:
+    source = midi.Input(run_in_subprocess=False)
+    path = tmp_path / "capture.middy"
+    with source.connect(source.ports()[0]) as receiver:
+        recorder = receiver.start(path, descriptor_limit=2)
+        assert recorder.record(archive.Stream(id="another", label="Keyboard"))
+        assert not receiver.stop().complete
+    reader = archive.Reader(path, recover=True)
+    assert len(list(reader)) == 2
+    assert "descriptor count limit (2)" in str(reader.problem)
+
+
 def test_syx_write_selects_messages_from_input_recording(
     iterable_input: list[Callable[[events.ReceivedPacket], object]], tmp_path: Path
 ) -> None:
