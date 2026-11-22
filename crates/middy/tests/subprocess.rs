@@ -244,23 +244,28 @@ fn scan_interval_changes_existing_and_future_inputs_and_outputs() {
     }
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(std::fs::read_to_string(&scans).unwrap(), before);
+    let directions = ["true", "false"];
+    let scans_for = |contents: &str, direction: &str| {
+        contents
+            .lines()
+            .filter(|s| s.split('\t').nth(1) == Some(direction))
+            .count()
+    };
+    let previous = directions.map(|direction| scans_for(&before, direction));
     middy::set_scan_interval(Duration::from_millis(20)).unwrap();
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         let after = std::fs::read_to_string(&scans).unwrap();
-        if after.lines().count() >= before.lines().count() + 6 {
-            for direction in ["true", "false"] {
-                let calls = after
-                    .lines()
-                    .filter(|s| s.split('\t').nth(1) == Some(direction))
-                    .count();
-                assert!(calls >= 4, "both input and output polling must change");
-            }
+        if directions
+            .into_iter()
+            .zip(previous)
+            .all(|(direction, count)| scans_for(&after, direction) >= count + 3)
+        {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "interval update did not wake the scanner"
+            "interval update did not wake both scanners"
         );
         std::thread::sleep(Duration::from_millis(5));
     }
