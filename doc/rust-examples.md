@@ -373,6 +373,8 @@ Hold C and E for two beats, bending only E up two semitones after the first beat
 Use an MPE synth and reserve channels 1 through 3. Playback configures a lower
 zone with a 48-semitone bend range and disables it after the last release.
 The member channels retain the configured bend range.
+If playback is interrupted, middy attempts releases, bend resets, and zone
+disable on the original destinations. New destinations join on the next send.
 
 ```rust
 use middy::{Beats, Chord, Note, Output};
@@ -436,9 +438,9 @@ out.close()?;
 
 This needs a native UMP backend and endpoint. Group defaults to 1; output
 resolves the channel.
-MIDI 2 velocity uses its native 16-bit range. There is no automatic protocol
-translation, full-note scheduling or cleanup for UMP. Raw packets likewise retain
-their own addressing. The `translation` module provides explicit conversion when needed.
+MIDI 2 velocity uses its native 16-bit range. Raw packets retain their own
+addressing. For explicit conversion, use the `translation` module. Authored
+MPE notes use MIDI 1 UMP on group 1 and have their own interruption cleanup.
 
 MIDI 1 UMP uses the same message types, with a group and native MIDI 1 values:
 

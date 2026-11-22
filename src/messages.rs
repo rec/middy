@@ -1369,7 +1369,7 @@ impl Chord {
 }
 
 type FractionParts = (i128, i128);
-type AuthoredPlan = (Vec<(FractionParts, Py<PyAny>)>, FractionParts);
+type AuthoredPlan = (Vec<(FractionParts, Py<PyAny>)>, FractionParts, u8);
 
 #[pyfunction]
 pub(crate) fn schedule_notes(
@@ -1377,6 +1377,7 @@ pub(crate) fn schedule_notes(
     beat_period: &Bound<'_, PyAny>,
     channel: Option<u8>,
     limit: usize,
+    encoding: crate::packets::Encoding,
 ) -> PyResult<AuthoredPlan> {
     use middy::events::Rational;
     let py = value.py();
@@ -1419,19 +1420,20 @@ pub(crate) fn schedule_notes(
         vec![resolve_note(value.extract()?)?]
     };
     // At 60 BPM, these already-resolved beat magnitudes are seconds.
-    let (events, duration) = messages::schedule_notes(&notes, Some(60.into()), channel)
+    let plan = messages::schedule_notes(&notes, Some(60.into()), channel, encoding.native())
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    if events.len() > limit {
+    if plan.events.len() > limit {
         return Err(PyValueError::new_err(
             "untimed playback exceeds the sequence limit",
         ));
     }
     let parts = |v: Rational| (v.numerator(), v.denominator());
-    let events = events
+    let events = plan
+        .events
         .into_iter()
         .map(|(at, message)| Ok((parts(at), crate::event_values::to_python(py, message)?)))
         .collect::<PyResult<_>>()?;
-    Ok((events, parts(duration)))
+    Ok((events, parts(plan.duration), plan.members))
 }
 
 #[pyclass(frozen, module = "middy.messages")]

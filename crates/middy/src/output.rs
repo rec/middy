@@ -48,6 +48,7 @@ pub struct Output {
     connection: Option<Connection>,
     clock: Box<dyn PlaybackClock>,
     state: OutputState,
+    mpe: Option<crate::mpe::PlaybackState>,
     closed: bool,
 }
 
@@ -210,6 +211,7 @@ impl Output {
             connection: None,
             clock: Box::new(MonotonicClock::default()),
             state: OutputState::default(),
+            mpe: None,
             closed: false,
         }
     }
@@ -487,9 +489,16 @@ impl Output {
             }
             Ok(())
         })();
-        match result {
-            Ok(()) => Ok(report),
-            Err(cause) => Err(Failure { report, cause }),
+        match (result, self.finish_mpe()) {
+            (Ok(()), Ok(())) => Ok(report),
+            (Err(cause), Ok(())) => Err(Failure { report, cause }),
+            (result, Err(error)) => Err(Failure {
+                report,
+                cause: Cause::Cleanup {
+                    error,
+                    trigger: result.err().map(Box::new),
+                },
+            }),
         }
     }
     pub fn closed(&self) -> bool {
@@ -510,13 +519,17 @@ impl Output {
             return Ok(());
         }
         self.closed = true;
-        let mut result = Ok(());
+        let mut result = self.finish_mpe().map_err(io::Error::from);
         if self.connection.is_some() {
             for message in std::mem::take(&mut self.state).cleanup() {
                 if let Err(error) = self.transmit(Prepared::Packet(Packet::Bytes(
                     message.encode().expect("cleanup channels are resolved"),
                 ))) {
-                    result = Err(error);
+                    if result.is_ok() {
+                        result = Err(error);
+                    } else {
+                        report(&error);
+                    }
                     break;
                 }
             }
@@ -636,12 +649,28 @@ impl Output {
     ) -> io::Result<()> {
         let remaining = self.sequence_limit - plan.len();
         crate::sequence::check_event_limit(notes, remaining)?;
-        let (events, duration) = crate::sequence::schedule_notes(notes, self.bpm, self.channel)?;
-        for (offset, message) in events {
+        let crate::sequence::NoteSchedule {
+            events,
+            duration,
+            members,
+        } = crate::sequence::schedule_notes(notes, self.bpm, self.channel, self.options.encoding)?;
+        let count = events.len();
+        for (index, (offset, message)) in events.into_iter().enumerate() {
             let at = elapsed.checked_add(offset)?;
+            let prepared = self.prepare_message(message.clone())?;
+            let prepared = if members == 0 {
+                prepared
+            } else {
+                Prepared::Mpe {
+                    packet: Box::new(prepared),
+                    message,
+                    start: (index == 0).then_some(members),
+                    end: index + 1 == count,
+                }
+            };
             plan.push((
                 nanoseconds(at)?,
-                Some(self.prepare_message(message)?),
+                Some(prepared),
                 at.multiply(1_000_000_000, 1)?.denominator() != 1,
             ));
         }
@@ -741,6 +770,35 @@ impl Output {
         Ok(true)
     }
     fn transmit(&mut self, prepared: Prepared) -> io::Result<()> {
+        let prepared = match prepared {
+            Prepared::Mpe {
+                packet,
+                message,
+                start,
+                end,
+            } => {
+                if let Some(members) = start {
+                    if let Some(Connection::Group(group)) = &mut self.connection {
+                        group.pin()?;
+                    }
+                    self.mpe = Some(crate::mpe::PlaybackState::new(
+                        members,
+                        self.options.encoding,
+                    ));
+                }
+                if let Some(mpe) = &mut self.mpe {
+                    mpe.attempt(&message);
+                }
+                self.transmit(*packet)?;
+                if end {
+                    self.mpe = None;
+                } else if let Some(mpe) = &mut self.mpe {
+                    mpe.confirm(&message);
+                }
+                return Ok(());
+            }
+            other => other,
+        };
         let connection = self.connection.as_mut().expect("connected output");
         let tracked = !matches!(connection, Connection::Group(_));
         match prepared {
@@ -768,7 +826,33 @@ impl Output {
                 }
                 result.map_err(io::Error::from)
             }
+            Prepared::Mpe { .. } => unreachable!("MPE steps are handled before transport"),
         }
+    }
+
+    fn finish_mpe(&mut self) -> crate::midi::Result<()> {
+        let result = if let Some(mpe) = self.mpe.take() {
+            mpe.cleanup()
+                .map_err(crate::midi::Error::from)
+                .and_then(|packets| {
+                    if let Some(Connection::Group(group)) = &mut self.connection {
+                        return group.cleanup_pinned(&packets);
+                    }
+                    let mut failure = None;
+                    for packet in packets {
+                        if let Err(error) = self.transmit(Prepared::Packet(packet)) {
+                            failure.get_or_insert_with(|| error.into());
+                        }
+                    }
+                    failure.map_or(Ok(()), Err)
+                })
+        } else {
+            Ok(())
+        };
+        if let Some(Connection::Group(group)) = &mut self.connection {
+            group.unpin();
+        }
+        result
     }
 }
 fn sequence_limit_error() -> io::Error {
@@ -790,6 +874,12 @@ enum Prepared {
     Command {
         command: AnyCommand,
         packets: Vec<Vec<u8>>,
+    },
+    Mpe {
+        packet: Box<Prepared>,
+        message: Payload,
+        start: Option<u8>,
+        end: bool,
     },
 }
 fn replay_message(record: io::Result<crate::archive::Record>) -> Option<io::Result<Payload>> {

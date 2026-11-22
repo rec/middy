@@ -1,6 +1,67 @@
 //! Pure MPE zone configuration, explicit allocation and bounded channel tracking.
 pub use crate::event_views::Mpe as Tracker;
 use crate::messages::{AnyMessage, Command, ParameterSet, ValueError};
+use crate::transport::{Encoding, Packet};
+use std::collections::BTreeSet;
+
+/// State of an authored MPE phrase on the lower zone.
+#[doc(hidden)]
+pub struct PlaybackState {
+    members: u8,
+    encoding: Encoding,
+    sounding: BTreeSet<(u8, u8)>,
+}
+
+impl PlaybackState {
+    pub fn new(members: u8, encoding: Encoding) -> Self {
+        Self {
+            members,
+            encoding,
+            sounding: BTreeSet::new(),
+        }
+    }
+
+    /// Assume an attack may sound even when the driver reports an error.
+    pub fn attempt(&mut self, message: &crate::events::Payload) {
+        if let crate::events::Payload::Message(AnyMessage::NoteOn(note)) = message {
+            if let Some(channel) = note.channel() {
+                self.sounding.insert((channel, note.note()));
+            }
+        }
+    }
+
+    pub fn confirm(&mut self, message: &crate::events::Payload) {
+        if let crate::events::Payload::Message(AnyMessage::NoteOff(note)) = message {
+            if let Some(channel) = note.channel() {
+                self.sounding.remove(&(channel, note.note()));
+            }
+        }
+    }
+
+    pub fn cleanup(self) -> Result<Vec<Packet>, ValueError> {
+        use crate::messages::{NoteOff, PitchBend, PrimitiveMessage};
+        use crate::ump::UmpValue;
+        let mut messages = Vec::new();
+        for (channel, note) in self.sounding {
+            messages.push(AnyMessage::NoteOff(
+                NoteOff::new(note.into())?.with_channel(channel.into())?,
+            ));
+        }
+        for channel in 2..=1 + i64::from(self.members) {
+            messages.push(AnyMessage::PitchBend(
+                PitchBend::new()?.with_channel(channel)?,
+            ));
+        }
+        messages.extend(ZoneConfiguration::new(1, 0)?.expand()?);
+        messages
+            .into_iter()
+            .map(|message| match self.encoding {
+                Encoding::Bytes => message.encode().map(Packet::Bytes),
+                Encoding::Ump => message.with_group(1)?.encode_words().map(Packet::Ump),
+            })
+            .collect()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ZoneConfiguration {

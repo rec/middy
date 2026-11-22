@@ -123,7 +123,7 @@ impl Output {
         OutputConnection::open(py, slf, move |native| match port {
             Some(port) => native
                 .connect(&port)
-                .map(Sender::Single)
+                .map(SenderPort::Single)
                 .map_err(middy::midi::Error::Connect),
             None => Err(middy::midi::Error::Connect(transport::Error::Invalid(
                 "port is not a native snapshot from this client".into(),
@@ -138,7 +138,7 @@ impl Output {
         let subprocess = slf.get().subprocess.clone();
         OutputConnection::open(py, slf, move |native| {
             middy::midi::OutputGroup::new(native, patterns, subprocess)
-                .map(|group| Sender::Group(Box::new(group)))
+                .map(|group| SenderPort::Group(Box::new(group)))
         })
     }
     fn create_virtual(
@@ -149,7 +149,7 @@ impl Output {
         OutputConnection::open(py, slf, move |native| {
             native
                 .create_virtual(&name)
-                .map(Sender::Single)
+                .map(SenderPort::Single)
                 .map_err(middy::midi::Error::Connect)
         })
     }
@@ -161,11 +161,16 @@ pub struct OutputConnection {
     encoding: Encoding,
     failure: std::sync::Mutex<Option<Arc<middy::midi::Error>>>,
 }
-enum Sender {
+struct Sender {
+    port: SenderPort,
+    mpe: Option<middy::mpe::PlaybackState>,
+}
+
+enum SenderPort {
     Single(transport::OutputConnection),
     Group(Box<middy::midi::OutputGroup>),
 }
-impl Sender {
+impl SenderPort {
     fn send_failure_is_terminal(&self) -> bool {
         match self {
             Self::Single(_) => true,
@@ -190,6 +195,81 @@ impl Sender {
             Self::Single(c) => c.close().map_err(middy::midi::Error::Transport),
             Self::Group(c) => c.close(),
         }
+    }
+}
+impl Sender {
+    fn send(&mut self, packet: &transport::Packet) -> middy::midi::Result<()> {
+        self.port.send(packet)
+    }
+
+    fn send_command(&mut self, command: &middy::messages::AnyCommand) -> middy::midi::Result<()> {
+        self.port.send_command(command)
+    }
+
+    fn send_mpe(
+        &mut self,
+        message: &middy::events::Payload,
+        start: Option<u8>,
+        end: bool,
+        encoding: transport::Encoding,
+    ) -> middy::midi::Result<()> {
+        use middy::events::Payload;
+        use middy::messages::PrimitiveMessage;
+        use middy::ump::UmpValue;
+        if let Some(members) = start {
+            if let SenderPort::Group(group) = &mut self.port {
+                group.pin()?;
+            }
+            self.mpe = Some(middy::mpe::PlaybackState::new(members, encoding));
+        }
+        if let Some(state) = &mut self.mpe {
+            state.attempt(message);
+        }
+        match message {
+            Payload::Command(command) => self.send_command(command)?,
+            Payload::Message(message) => {
+                let packet = match encoding {
+                    transport::Encoding::Bytes => transport::Packet::Bytes(message.encode()?),
+                    transport::Encoding::Ump => transport::Packet::Ump(message.encode_words()?),
+                };
+                self.send(&packet)?;
+            }
+            Payload::Ump(_) => unreachable!("authored MPE uses MIDI 1 messages"),
+        }
+        if end {
+            self.mpe = None;
+        } else if let Some(state) = &mut self.mpe {
+            state.confirm(message);
+        }
+        Ok(())
+    }
+
+    fn finish_mpe(&mut self) -> middy::midi::Result<()> {
+        let result = self.mpe.take().map_or(Ok(()), |state| {
+            let packets = state.cleanup()?;
+            match &mut self.port {
+                SenderPort::Group(group) => group.cleanup_pinned(&packets),
+                SenderPort::Single(connection) => {
+                    let mut failure = None;
+                    for packet in &packets {
+                        if let Err(error) = connection.send(packet) {
+                            failure.get_or_insert(middy::midi::Error::Send(error));
+                        }
+                    }
+                    failure.map_or(Ok(()), Err)
+                }
+            }
+        });
+        if let SenderPort::Group(group) = &mut self.port {
+            group.unpin();
+        }
+        result
+    }
+
+    fn close(mut self) -> middy::midi::Result<transport::Output> {
+        let result = self.finish_mpe();
+        let closed = self.port.close();
+        result.and(closed)
     }
 }
 #[pymethods]
@@ -241,6 +321,30 @@ impl OutputConnection {
             .map_err(|e| transport_error(e, "send"))?;
         self.send_value(py, &packet, Sender::send)
     }
+    fn send_mpe(
+        &self,
+        py: Python<'_>,
+        message: &Bound<'_, PyAny>,
+        start: Option<u8>,
+        end: bool,
+    ) -> PyResult<()> {
+        check_blocking_thread()?;
+        let payload = crate::event_values::payload(message)?;
+        let encoding = self.encoding.native();
+        self.send_value(py, &payload, move |native, payload| {
+            native.send_mpe(payload, start, end, encoding)
+        })
+    }
+
+    fn finish_mpe(&self, py: Python<'_>) -> PyResult<()> {
+        let mut outcome = Ok(());
+        self.resource
+            .native
+            .cleanup(&self.resource.client, py, |native| {
+                outcome = native.finish_mpe();
+            })?;
+        outcome.map_err(|error| midi_error(&error))
+    }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
         check_blocking_thread()?;
         py.detach(|| self.resource.close())
@@ -285,7 +389,7 @@ impl OutputConnection {
                 .native
                 .send(&self.resource.client, py, value, |native, value| {
                     if let Err(error) = send(native, value) {
-                        let terminal = native.send_failure_is_terminal();
+                        let terminal = native.port.send_failure_is_terminal();
                         failure = Some((error, terminal));
                         if terminal {
                             return Err(crate::errors::SendError::new_err("MIDI send failed"));
@@ -310,7 +414,7 @@ impl OutputConnection {
     fn open(
         py: Python<'_>,
         client: Py<Output>,
-        operation: impl FnOnce(transport::Output) -> middy::midi::Result<Sender> + Send,
+        operation: impl FnOnce(transport::Output) -> middy::midi::Result<SenderPort> + Send,
     ) -> PyResult<Py<Self>> {
         check_blocking_thread()?;
         let encoding = client.get().encoding;
@@ -332,10 +436,12 @@ impl OutputConnection {
         let mut failure = None;
         let result = py.detach(|| {
             resource.connect(|native| {
-                operation(native).map_err(|error| {
-                    failure = Some(error);
-                    crate::errors::ConnectError::new_err("MIDI output open failed")
-                })
+                operation(native)
+                    .map(|port| Sender { port, mpe: None })
+                    .map_err(|error| {
+                        failure = Some(error);
+                        crate::errors::ConnectError::new_err("MIDI output open failed")
+                    })
             })
         });
         if let Some(error) = failure {

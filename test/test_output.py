@@ -45,7 +45,12 @@ class NativeConnection:
             self.group_state.feed(packet)
 
     def send_command(
-        self, command: messages.ControlChange | messages.ParameterStep
+        self,
+        command: messages.ControlChange
+        | messages.ParameterStep
+        | messages.ParameterSet
+        | messages.ProgramChange
+        | ZoneConfiguration,
     ) -> None:
         for i, message in enumerate(codecs.expand(command)):
             if self.partial == i:
@@ -53,6 +58,18 @@ class NativeConnection:
             self.sink.send(message)
             if self.group_state is not None:
                 self.group_state.feed(codecs.encode(message))
+
+    def send_mpe(self, message: messages.Message, start: int | None, end: bool) -> None:
+        prepared = _native.prepare_output(midi.Encoding.Bytes, message)
+        if isinstance(prepared, tuple):
+            assert isinstance(message, (messages.ParameterSet, ZoneConfiguration))
+            self.send_command(message)
+        else:
+            assert isinstance(prepared, bytes)
+            self.send(prepared)
+
+    def finish_mpe(self) -> None:
+        pass
 
     def close(self) -> None:
         if self.group_state is not None:

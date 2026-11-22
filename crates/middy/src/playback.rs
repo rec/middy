@@ -196,6 +196,10 @@ pub struct Report {
 pub enum Cause<E> {
     Input(io::Error),
     Send(E),
+    Cleanup {
+        error: E,
+        trigger: Option<Box<Cause<E>>>,
+    },
 }
 #[derive(Debug)]
 pub struct Failure<E> {
@@ -209,9 +213,20 @@ impl<E: fmt::Display> fmt::Display for Failure<E> {
             "playback stopped after {} accepted events: ",
             self.report.sent_events
         )?;
-        match &self.cause {
-            Cause::Input(e) => e.fmt(f),
-            Cause::Send(e) => e.fmt(f),
+        self.cause.fmt(f)
+    }
+}
+impl<E: fmt::Display> fmt::Display for Cause<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Input(error) => error.fmt(f),
+            Self::Send(error) => error.fmt(f),
+            Self::Cleanup { error, trigger } => {
+                if let Some(trigger) = trigger {
+                    write!(f, "{trigger}; ")?;
+                }
+                write!(f, "MPE cleanup failed: {error}")
+            }
         }
     }
 }
@@ -219,7 +234,7 @@ impl<E: std::error::Error + 'static> std::error::Error for Failure<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match &self.cause {
             Cause::Input(e) => e,
-            Cause::Send(e) => e,
+            Cause::Send(e) | Cause::Cleanup { error: e, .. } => e,
         })
     }
 }

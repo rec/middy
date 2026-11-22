@@ -189,6 +189,24 @@ impl<T> Connection<T> {
         self.check_failed()
     }
 
+    pub fn cleanup<C: Send>(
+        &self,
+        client: &Client<C>,
+        py: Python<'_>,
+        operation: impl FnOnce(&mut T) + Send,
+    ) -> PyResult<()>
+    where
+        T: Send,
+    {
+        check_blocking_thread()?;
+        py.detach(|| {
+            if let Some(native) = self.lock_native(client)?.as_mut() {
+                native_call("cleanup", || operation(native))?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn fail<C>(&self, client: &Client<C>) {
         self.failed.store(true, Ordering::Release);
         client.failed.store(true, Ordering::Release);

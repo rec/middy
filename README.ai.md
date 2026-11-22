@@ -641,6 +641,13 @@ complete messages explicitly; the byte decoder continues to return raw SysEx.
 Explicit MPE helpers configure one zone at a time and offer allocation and
 overlap-aware tracking. Authored notes with per-note bends configure a lower zone
 and its member pitch-bend ranges automatically for playback.
+Reserve the manager and member channels for that send. Matching outputs use the
+same set of destinations from the first MPE setup write until the send returns.
+If playback stops early, middy attempts note releases, bend centers, and zone
+disable on destinations where setup was attempted. Cleanup does not add to the
+playback event count. A failed cleanup is reported alongside any original
+failure. Authored MPE sends on UMP use MIDI 1 messages in group 1. The member
+bend ranges stay at their configured values.
 Named RPN helpers keep pitch-bend
 cents, fine-tuning units and GM2 modulation-depth units distinct. Channel-mode
 helpers construct ordinary CC values. All Notes Off can leave sustained sound;

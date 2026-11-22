@@ -26,7 +26,8 @@ pub fn run(
                 .send(delivery.event.clone())
                 .map(|_| ())
                 .map_err(|e| match e.cause {
-                    crate::playback::Cause::Send(e) => e,
+                    crate::playback::Cause::Send(e)
+                    | crate::playback::Cause::Cleanup { error: e, .. } => e,
                     crate::playback::Cause::Input(e) => e.into(),
                 })
         },

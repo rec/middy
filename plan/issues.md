@@ -4,39 +4,6 @@ Source audit of `70633cf` on 2026-11-22. The findings below describe code
 paths and give scenarios for regression tests. Driver-dependent outcomes and
 release readiness still need the evidence listed at the end.
 
-## Address first
-
-### P1. Hot-plug outputs can miss MPE setup
-
-The chord plan configures the zone and bend ranges once, before the first
-attack. A matched output group reconciles devices before each logical send.
-If a new synth appears after setup, it can receive an attack or pitch bend
-with its old configuration, or receive zone disable without having received
-zone enable. A second synth that joins between the two attacks of a staggered
-chord is enough to expose the problem. Keep the destinations stable for the
-chord or require setup for each destination before admitting its first event.
-Test a topology change between setup and attack with a fake catalog.
-([Chord planner](../crates/middy/src/sequence.rs#L247),
-[output group](../crates/middy/src/output_group.rs#L158))
-
-### P1. Interrupted automatic MPE leaves the instrument configured
-
-Zone disable is the last event in the chord. Cancellation, an interrupt, or
-a send failure can skip it, along with some releases and bend resets. MIDI 1
-byte output cleanup tracks notes and selected controllers, so closing can
-release notes and center bends but does not restore the MPE zone. UMP output
-does not get that byte-based cleanup. A retained output can return a cancelled
-report with the synth still sounding or its channel layout changed. Define zone
-ownership, cleanup on interrupted playback, and how to report incomplete
-cleanup. Exercise cancellation after setup, after an attack, and during a
-compound setup command. Successful playback also leaves the configured member
-bend range, so using these channels alongside another application can change
-that application's pitch response.
-([MPE setup and teardown](../crates/middy/src/sequence.rs#L247),
-[Rust cancellation](../crates/middy/src/output.rs#L661),
-[output cleanup](../crates/middy/src/output.rs#L833),
-[Python cancellation](../src/playback.rs#L182))
-
 ## Reliability and data integrity
 
 ### P2. Large packets can exceed memory budgets during untimed preflight

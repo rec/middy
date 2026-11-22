@@ -12,6 +12,7 @@ struct Destination {
     port: PortInfo,
     connection: transport::OutputConnection,
     state: OutputState,
+    mpe_touched: bool,
 }
 impl Destination {
     fn close(mut self) -> midi::Result<()> {
@@ -48,6 +49,7 @@ pub struct OutputGroup {
     destinations: Vec<Destination>,
     unavailable: Option<(PortInfo, Arc<midi::Error>)>,
     selected_count: usize,
+    pinned: bool,
     failure: Option<Arc<midi::Error>>,
 }
 impl OutputGroup {
@@ -76,6 +78,7 @@ impl OutputGroup {
             destinations: Vec::new(),
             unavailable: None,
             selected_count: 0,
+            pinned: false,
             failure: None,
         };
         group.refresh()?;
@@ -83,6 +86,63 @@ impl OutputGroup {
     }
     pub fn failure(&self) -> Option<Arc<midi::Error>> {
         self.failure.clone()
+    }
+
+    /// Snapshot the complete destination set before the first MPE setup write.
+    pub fn pin(&mut self) -> midi::Result<()> {
+        if let Some(error) = &self.failure {
+            return Err(midi::Error::Shared(Arc::clone(error)));
+        }
+        if !self.pinned {
+            if let Err(error) = self.refresh() {
+                return Err(self.fail(error));
+            }
+            if let Some((port, error)) = &self.unavailable {
+                return Err(self.broadcast_error(0, port, midi::Error::Shared(Arc::clone(error))));
+            }
+            if self.destinations.is_empty() {
+                return Err(midi::Error::Connect(transport::Error::Invalid(
+                    "no matching MIDI outputs".into(),
+                )));
+            }
+            self.pinned = true;
+        }
+        for destination in &mut self.destinations {
+            destination.mpe_touched = false;
+        }
+        Ok(())
+    }
+
+    pub fn unpin(&mut self) {
+        if self.pinned {
+            for destination in &mut self.destinations {
+                destination.mpe_touched = false;
+            }
+        }
+        self.pinned = false;
+    }
+
+    /// Attempt cleanup on every original destination, even after a broadcast fails.
+    pub fn cleanup_pinned(&mut self, packets: &[transport::Packet]) -> midi::Result<()> {
+        let mut failure = None;
+        for destination in self.destinations.iter_mut().filter(|d| d.mpe_touched) {
+            for packet in packets {
+                let result = destination
+                    .connection
+                    .send(packet)
+                    .map_err(midi::Error::Send)
+                    .and_then(|()| {
+                        if let transport::Packet::Bytes(bytes) = packet {
+                            destination.state.feed(bytes)?;
+                        }
+                        Ok(())
+                    });
+                if let Err(error) = result {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
     fn refresh(&mut self) -> midi::Result<()> {
         let snapshot = self.scanner.snapshot().map_err(midi::Error::Connect)?;
@@ -143,6 +203,7 @@ impl OutputGroup {
                     port: info,
                     connection,
                     state: OutputState::default(),
+                    mpe_touched: false,
                 }),
                 Ok(None) => (),
                 Err(error) => {
@@ -161,10 +222,13 @@ impl OutputGroup {
         if let Some(error) = &self.failure {
             return Err(midi::Error::Shared(Arc::clone(error)));
         }
-        if let Err(error) = self.refresh() {
-            return Err(self.fail(error));
+        if !self.pinned {
+            if let Err(error) = self.refresh() {
+                return Err(self.fail(error));
+            }
         }
         for i in 0..self.destinations.len() {
+            self.destinations[i].mpe_touched |= self.pinned;
             if let Err(cause) = send(&mut self.destinations[i]) {
                 let error = self.broadcast_error(i, &self.destinations[i].port, cause);
                 return Err(self.fail(error));

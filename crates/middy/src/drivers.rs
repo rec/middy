@@ -43,7 +43,7 @@ pub trait Sender {
 impl Sender for midi::Output {
     fn send(&mut self, message: Payload) -> midi::Result<()> {
         let report = self.send(message).map_err(|e| match e.cause {
-            crate::playback::Cause::Send(e) => e,
+            crate::playback::Cause::Send(e) | crate::playback::Cause::Cleanup { error: e, .. } => e,
             crate::playback::Cause::Input(e) => e.into(),
         })?;
         if report.cancelled {

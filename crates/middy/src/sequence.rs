@@ -180,11 +180,19 @@ pub(crate) fn check_event_limit(notes: &[Note], mut remaining: usize) -> io::Res
 
 /// Shared authored-note planner for the Rust and Python output APIs.
 #[doc(hidden)]
+pub struct NoteSchedule {
+    pub events: Vec<(Rational, Payload)>,
+    pub duration: Rational,
+    pub members: u8,
+}
+
+#[doc(hidden)]
 pub fn schedule_notes(
     notes: &[Note],
     bpm: Option<Rational>,
     channel: Option<u8>,
-) -> io::Result<(Vec<(Rational, Payload)>, Rational)> {
+    encoding: crate::transport::Encoding,
+) -> io::Result<NoteSchedule> {
     let mpe = notes.iter().any(|note| !note.bends.is_empty());
     if mpe && (channel.is_some() || notes.iter().any(|note| note.channel().is_some())) {
         return Err(invalid(
@@ -280,8 +288,21 @@ pub fn schedule_notes(
             Payload::Command(AnyCommand::ZoneConfiguration(ZoneConfiguration::new(1, 0)?)),
         ));
         events = setup;
+        if encoding == crate::transport::Encoding::Ump {
+            for (_, payload) in &mut events {
+                *payload = match payload {
+                    Payload::Command(command) => Payload::Command(command.clone().with_group(1)?),
+                    Payload::Message(message) => Payload::Message(message.clone().with_group(1)?),
+                    Payload::Ump(_) => unreachable!("authored MPE uses MIDI 1 messages"),
+                };
+            }
+        }
     }
-    Ok((events, end))
+    Ok(NoteSchedule {
+        events,
+        duration: end,
+        members,
+    })
 }
 
 fn invalid(message: &str) -> io::Error {

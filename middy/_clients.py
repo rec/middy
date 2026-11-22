@@ -16,7 +16,7 @@ from queue import Empty, Full
 from threading import Lock, RLock, Thread
 from time import monotonic
 from types import TracebackType
-from typing import Annotated, Literal, Self, cast
+from typing import Annotated, Literal, NamedTuple, Self, cast
 from uuid import uuid4
 
 from pydantic import (
@@ -578,6 +578,7 @@ class Output(_Client, frozen=True):
                 timeline,
                 cancel=cancel,
                 metrics=metrics,
+                finish=self._finish_mpe,
             )
         finally:
             try:
@@ -592,6 +593,11 @@ class Output(_Client, frozen=True):
             self._open_locked()
             assert self._connection is not None
             self._connection._send(value)
+
+    def _finish_mpe(self) -> None:
+        with self._initialization:
+            if self._connection is not None and not self._closed:
+                self._connection.finish_mpe()
 
     def _timeline(
         self,
@@ -703,19 +709,27 @@ class Output(_Client, frozen=True):
             deadline = round(elapsed * 1_000_000_000)
             rounded = (elapsed * 1_000_000_000).denominator != 1
             if isinstance(v, (messages.Note, messages.Chord)):
-                planned, duration = _native.schedule_notes(
+                planned, duration, members = _native.schedule_notes(
                     v,
                     self._beat_period,
                     self.channel,
                     self.sequence_limit - len(timeline),
+                    self.encoding,
                 )
-                for offset, message in planned:
+                for index, (offset, message) in enumerate(planned):
                     at_ns = (elapsed + Fraction(*offset)) * 1_000_000_000
                     prepared = _native.prepare_output(self.encoding, message)
+                    value: object = message if isinstance(prepared, tuple) else prepared
+                    if members:
+                        value = _MpeStep(
+                            message,
+                            members if index == 0 else None,
+                            index + 1 == len(planned),
+                        )
                     timeline.append(
                         (
                             round(at_ns),
-                            message if isinstance(prepared, tuple) else prepared,
+                            value,
                             at_ns.denominator != 1,
                         )
                     )
@@ -856,6 +870,12 @@ class _InputTransport[T]:
                 self._native = None
 
 
+class _MpeStep(NamedTuple):
+    message: messages.Message
+    start: int | None
+    end: bool
+
+
 class _OutputState:
     """An open destination for messages, encoded packets and timed playback."""
 
@@ -867,6 +887,7 @@ class _OutputState:
         "_channel",
         "_beat_period",
         "_failure",
+        "_mpe_pending",
         "__weakref__",
     )
 
@@ -883,12 +904,17 @@ class _OutputState:
         connection._beat_period = client._beat_period
         connection._native = cast(_native.OutputConnection | None, None)
         connection._closed = True
+        connection._mpe_pending = False
         return connection
 
     def _send(self, value: object) -> None:
         _native.check_thread()
-        prepared = _native.prepare_output(self._encoding, value)
         assert self._native is not None
+        if isinstance(value, _MpeStep):
+            self._mpe_pending = True
+            self._native.send_mpe(*value)
+            return
+        prepared = _native.prepare_output(self._encoding, value)
         if isinstance(prepared, tuple):
             if self._state is None:
                 self._native.send_command(value)
@@ -922,6 +948,11 @@ class _OutputState:
     @property
     def closed(self) -> bool:
         return self._closed or (self._native is not None and self._native.closed)
+
+    def finish_mpe(self) -> None:
+        if self._mpe_pending and self._native is not None:
+            self._mpe_pending = False
+            self._native.finish_mpe()
 
     @property
     def worker_failure(self) -> BaseException | None:

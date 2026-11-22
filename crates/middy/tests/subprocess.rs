@@ -430,6 +430,84 @@ fn selected_output_survives_no_matches_and_failed_attachment() {
     assert_eq!(sent_to(&log, "Synth A"), ["b:f8", "b:f8"]);
     assert_eq!(sent_to(&log, "Synth B"), ["b:f8"]);
 }
+
+#[test]
+fn cancelled_mpe_cleans_only_the_pinned_destinations() {
+    let _serial = SERIAL.lock().unwrap();
+    let (topology, log, worker) = output_fixture("Synth A\n");
+    let cancel = middy::Cancellation::default();
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port("Synth *")
+        .unwrap()
+        .with_playback(middy::PlaybackOptions {
+            cancel: cancel.clone(),
+            ..Default::default()
+        });
+    let note = middy::Note::new(Duration::from_secs(10), 60)
+        .unwrap()
+        .bend(Duration::from_secs(5), 2.0)
+        .unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !sent_to(&log, "Synth A")
+                .iter()
+                .any(|value| value == "b:913c5a")
+            {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            change_outputs(&topology, &log, "Synth A\nSynth New\n");
+            cancel.cancel();
+        });
+        assert!(output.send(note).unwrap().cancelled);
+    });
+    let packets = sent_to(&log, "Synth A");
+    assert!(packets.iter().any(|value| value == "b:813c00"));
+    assert!(packets.iter().any(|value| value == "b:b00600"));
+    assert!(sent_to(&log, "Synth New").is_empty());
+    output = output.with_playback(Default::default());
+    output.send(middy::TimingClock::new().unwrap()).unwrap();
+    output.close().unwrap();
+    assert_eq!(sent_to(&log, "Synth New"), ["b:f8"]);
+}
+
+#[test]
+fn failed_mpe_setup_preserves_send_and_cleanup_progress() {
+    let _serial = SERIAL.lock().unwrap();
+    let (_, log, mut worker) = output_fixture("Good\nFail\nLater\n");
+    worker.args[3] = "1".into();
+    let mut output = Output::new()
+        .with_run_in_subprocess(true)
+        .unwrap()
+        .with_subprocess_options(worker)
+        .unwrap()
+        .with_port("*")
+        .unwrap();
+    let note = middy::Note::new(Duration::from_millis(20), 60)
+        .unwrap()
+        .bend(Duration::ZERO, 2.0)
+        .unwrap();
+    let failure = output.send(note).unwrap_err();
+    let middy::events::PlaybackCause::Cleanup {
+        trigger: Some(trigger),
+        ..
+    } = failure.cause
+    else {
+        panic!("expected both the setup failure and the cleanup failure");
+    };
+    assert!(matches!(*trigger, middy::events::PlaybackCause::Send(_)));
+    assert_eq!(failure.report.sent_events, 0);
+    assert!(sent_to(&log, "Good")
+        .iter()
+        .any(|value| value == "b:b00600"));
+    assert!(sent_to(&log, "Later").is_empty());
+    let _ = output.close();
+}
 #[test]
 fn a_second_indistinguishable_endpoint_stops_following_before_broadcast() {
     let _serial = SERIAL.lock().unwrap();

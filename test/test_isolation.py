@@ -10,7 +10,7 @@ import sys
 import warnings
 import weakref
 from collections import Counter
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import ExitStack
 from functools import partial
 from pathlib import Path
@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 import pytest
 
-from middy import events, messages, midi, mpe, set_scan_interval
+from middy import _native, events, messages, midi, mpe, set_scan_interval
 from middy._clients import Input, Output
 from middy._native import CallbackBridge
 from middy._transport import ReceiveQueue
@@ -1003,6 +1003,87 @@ def test_output_keeps_open_destinations_after_a_transient_catalog_error(
         change_outputs(topology, log, "Synth A\nSynth B\nSynth C\n")
         output.send(messages.TimingClock())
         assert ("Synth C", "b:f8") in output_packets(log)
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+@pytest.mark.parametrize("encoding", [midi.Encoding.Bytes, midi.Encoding.Ump])
+def test_mpe_excludes_hotplug_and_releases_the_original_outputs(
+    output_topology: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    interrupt: bool,
+    encoding: midi.Encoding,
+) -> None:
+    topology, log = output_topology
+    write_ports(topology, "Synth A\n")
+    cancellation = events.Cancellation()
+    play = _native.output_sequence
+
+    def play_and_change_topology(
+        send: Callable[[object], None],
+        timeline: Iterable[tuple[int, object, bool]],
+        *,
+        cancel: events.Cancellation | None = None,
+        metrics: bool = False,
+        finish: Callable[[], None] | None = None,
+    ) -> events.PlaybackReport:
+        def send_and_cancel(value: object) -> None:
+            send(value)
+            if isinstance(getattr(value, "message", None), messages.NoteOn):
+                change_outputs(topology, log, "Synth A\nSynth New\n")
+                if interrupt:
+                    cancellation.cancel()
+
+        return play(
+            send_and_cancel, timeline, cancel=cancel, metrics=metrics, finish=finish
+        )
+
+    monkeypatch.setattr(_native, "output_sequence", play_and_change_topology)
+    with midi.Output(
+        port="Synth *", run_in_subprocess=True, encoding=encoding
+    ) as output:
+        report = output.send(
+            messages.Note("20 ms", 60).bend(at="10 ms", semitones=2),
+            cancel=cancellation,
+        )
+        assert report.cancelled is interrupt
+        packets = output_packets(log)
+        assert all(name == "Synth A" for name, _ in packets)
+        if encoding == midi.Encoding.Bytes:
+            attack, release, disable, clock = "b:913c5a", "b:813c00", "b:b00600", "b:f8"
+            tick = messages.TimingClock()
+        else:
+            attack, release, disable, clock = (
+                "u:20913c5a",
+                "u:20813c00",
+                "u:20b00600",
+                "u:10f80000",
+            )
+            tick = messages.TimingClock().replace(group=1)
+        assert ("Synth A", attack) in packets
+        assert ("Synth A", release) in packets
+        assert any(name == "Synth A" and disable[2:] in wire for name, wire in packets)
+        assert output.send(tick).sent_events == 1
+        assert ("Synth New", clock) in output_packets(log)
+
+
+def test_partial_mpe_setup_cleans_only_destinations_that_were_attempted(
+    output_topology: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    topology, log = output_topology
+    write_ports(topology, "Good\nFail\nLater\n")
+    monkeypatch.setenv("MIDDY_TEST_FAIL_AFTER", "1")
+    output = midi.Output(port="*", run_in_subprocess=True)
+    with pytest.raises(ExceptionGroup) as raised:
+        output.send(messages.Note("20 ms", 60).bend(at=0, semitones=2))
+    playback, cleanup = raised.value.exceptions
+    assert isinstance(playback, midi.BroadcastSendError)
+    assert [port.name for port in playback.completed_ports] == ["Good"]
+    assert isinstance(cleanup, midi.MidiError)
+    packets = output_packets(log)
+    assert ("Good", "b:b00600") in packets
+    assert all(name != "Later" for name, _ in packets)
+    with pytest.raises(midi.MidiError):
+        output.close()
 
 
 def test_default_output_still_selects_the_first_device(

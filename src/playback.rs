@@ -162,13 +162,14 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 /// Execute scalar and recorded segments on one caller-thread clock.
 #[pyfunction]
-#[pyo3(signature=(send,timeline,*,cancel=None,metrics=false))]
+#[pyo3(signature=(send,timeline,*,cancel=None,metrics=false,finish=None))]
 fn output_sequence(
     py: Python<'_>,
     send: &Bound<'_, PyAny>,
     timeline: &Bound<'_, PyAny>,
     cancel: Option<PyRef<'_, Cancellation>>,
     #[pyo3(from_py_with=crate::ump::boolean)] metrics: bool,
+    finish: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<PlaybackReport> {
     use model::PlaybackClock;
     crate::callback::check_thread()?;
@@ -218,6 +219,19 @@ fn output_sequence(
             }
         }
     })();
+    let cleanup = finish.map_or(Ok(()), |finish| finish.call0().map(drop));
+    let result = match (result, cleanup) {
+        (result, Ok(())) => result,
+        (Ok(()), Err(cleanup)) => Err(cleanup),
+        (Err(error), Err(cleanup)) => Err(PyErr::from_value(
+            py.import("builtins")?
+                .getattr("BaseExceptionGroup")?
+                .call1((
+                    "MIDI playback and MPE cleanup both failed",
+                    vec![error.into_value(py), cleanup.into_value(py)],
+                ))?,
+        )),
+    };
     match result {
         Ok(()) => Ok(PlaybackReport { value: report }),
         Err(error) => {

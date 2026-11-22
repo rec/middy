@@ -242,6 +242,9 @@ Hold C and E for two beats, bending only E up two semitones after the first beat
 Use an MPE synth and reserve channels 1 through 3. Playback configures a lower
 zone with a 48-semitone bend range and disables the zone after the last release.
 The member channels retain the configured bend range.
+If playback is interrupted, middy attempts to release the affected notes, center
+the bends, and disable the zone. Devices that appear after setup wait until the
+next send.
 
 ```python
 import middy as md
