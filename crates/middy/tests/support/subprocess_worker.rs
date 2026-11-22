@@ -143,6 +143,10 @@ fn main() {
                         error("native", "device enumeration failed", false, 0);
                         continue;
                     }
+                    if ports == "!fatal!\n" {
+                        error("native", "device enumeration failed", true, 0);
+                        return;
+                    }
                     port_names = ports.lines().map(str::to_owned).collect();
                     ok(
                         "ok",

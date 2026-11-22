@@ -321,7 +321,7 @@ fn shared_scan_failure_reaches_each_input_subscriber() {
         assert!(input.receive(Some(Duration::ZERO), None).unwrap().is_none());
         inputs.push(input);
     }
-    write_ports(&topology, "!fail!\n");
+    write_ports(&topology, "!fatal!\n");
     for input in &mut inputs {
         let error = input
             .receive(Some(Duration::from_secs(3)), None)

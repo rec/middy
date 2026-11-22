@@ -221,10 +221,18 @@ impl Subscription {
 
 fn poll(key: &Key, shared: &Shared) -> Result<()> {
     let client = Client::new(key)?;
-    poll_ports(shared, || client.ports())
+    poll_ports(
+        shared,
+        || client.ports(),
+        |error| matches!(error, Error::Native(_) | Error::Busy) && !client.worker_failed(),
+    )
 }
 
-fn poll_ports(shared: &Shared, mut ports: impl FnMut() -> Result<Vec<PortKey>>) -> Result<()> {
+fn poll_ports(
+    shared: &Shared,
+    mut ports: impl FnMut() -> Result<Vec<PortKey>>,
+    can_retry: impl Fn(&Error) -> bool,
+) -> Result<()> {
     let mut deadline = shared
         .schedule
         .lock()
@@ -239,7 +247,7 @@ fn poll_ports(shared: &Shared, mut ports: impl FnMut() -> Result<Vec<PortKey>>) 
                 scan_failed = false;
                 Some(ports)
             }
-            Err(error @ (Error::Native(_) | Error::Busy)) if initialized => {
+            Err(error) if initialized && can_retry(&error) => {
                 if !scan_failed {
                     eprintln!("middy: MIDI device scan failed; keeping the last catalog: {error}");
                 }
@@ -331,6 +339,13 @@ impl Client {
         }?;
         Ok(port_keys(&ports))
     }
+
+    fn worker_failed(&self) -> bool {
+        match self {
+            Self::Input(client) => client.worker_failure().is_some(),
+            Self::Output(client) => client.worker_failure().is_some(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -358,22 +373,26 @@ mod tests {
             name: "second".into(),
         };
         let mut scans = 0;
-        let result = poll_ports(&shared, || {
-            scans += 1;
-            match scans {
-                1 => Ok(vec![first.clone()]),
-                2 => Err(Error::Native("temporary enumeration failure".into())),
-                3 => {
-                    let state = shared.state.lock().unwrap();
-                    assert_eq!(
-                        state.as_ref().unwrap().as_ref().unwrap().ports.as_slice(),
-                        std::slice::from_ref(&first)
-                    );
-                    Ok(vec![second.clone()])
+        let result = poll_ports(
+            &shared,
+            || {
+                scans += 1;
+                match scans {
+                    1 => Ok(vec![first.clone()]),
+                    2 => Err(Error::Native("temporary enumeration failure".into())),
+                    3 => {
+                        let state = shared.state.lock().unwrap();
+                        assert_eq!(
+                            state.as_ref().unwrap().as_ref().unwrap().ports.as_slice(),
+                            std::slice::from_ref(&first)
+                        );
+                        Ok(vec![second.clone()])
+                    }
+                    _ => Err(Error::Closed),
                 }
-                _ => Err(Error::Closed),
-            }
-        });
+            },
+            |error| matches!(error, Error::Native(_)),
+        );
         assert_eq!(result, Err(Error::Closed));
         let snapshot = shared.state.into_inner().unwrap().unwrap().unwrap();
         assert_eq!(*snapshot.ports, [second]);

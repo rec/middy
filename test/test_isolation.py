@@ -979,7 +979,7 @@ def test_shared_scan_failure_reaches_each_output_subscriber(
     outputs = [
         midi.Output(port="Synth A", run_in_subprocess=True).connect() for _ in range(2)
     ]
-    write_ports(topology, "!fail!\n")
+    write_ports(topology, "!fatal!\n")
     deadline = monotonic() + 3
     with pytest.raises(midi.ConnectError, match="device enumeration failed"):
         while monotonic() < deadline:
@@ -990,6 +990,19 @@ def test_shared_scan_failure_reaches_each_output_subscriber(
     for o in outputs:
         with pytest.raises(midi.StateError):
             o.close()
+
+
+def test_output_keeps_open_destinations_after_a_transient_catalog_error(
+    output_topology: tuple[Path, Path],
+) -> None:
+    topology, log = output_topology
+    with midi.Output(port="Synth *", run_in_subprocess=True) as output:
+        change_outputs(topology, log, "!fail!\n")
+        output.send(messages.TimingClock())
+        assert output.worker_failure is None
+        change_outputs(topology, log, "Synth A\nSynth B\nSynth C\n")
+        output.send(messages.TimingClock())
+        assert ("Synth C", "b:f8") in output_packets(log)
 
 
 def test_default_output_still_selects_the_first_device(
