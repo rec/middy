@@ -157,7 +157,7 @@ class Input[T = messages.Message | events.StreamDiagnostic](_Client, frozen=True
                         if self.subprocess_worker == "python"
                         else "middy-worker"
                     ),
-                    worker_args=["-m", "middy._worker"]
+                    worker_args=["-P", "-m", "middy._worker"]
                     if self.subprocess_worker == "python"
                     else [],
                     worker_timeout=self.timeout,
@@ -484,7 +484,7 @@ class Output(_Client, frozen=True):
                         if self.subprocess_worker == "python"
                         else "middy-worker"
                     ),
-                    worker_args=["-m", "middy._worker"]
+                    worker_args=["-P", "-m", "middy._worker"]
                     if self.subprocess_worker == "python"
                     else [],
                     worker_timeout=self.timeout,

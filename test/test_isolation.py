@@ -1423,15 +1423,21 @@ def test_output_mixes_packets_messages_commands_and_playback_on_one_connection(
     assert output.closed
 
 
-def test_python_bootstrap_runs_the_rust_worker_without_native_initialization() -> None:
+def test_python_bootstrap_runs_the_rust_worker_without_native_initialization(
+    tmp_path: Path,
+) -> None:
     def string(value: str) -> bytes:
         data = value.encode()
         return b"\x03" + len(data).to_bytes(8) + data
 
     magic = b"MDWORK\x00\x01"
     request = b"\x06" + (2).to_bytes(8) + string("shutdown") + b"\x05" + bytes(8)
+    shadow = tmp_path / "middy"
+    shadow.mkdir()
+    (shadow / "__init__.py").touch()
     with subprocess.Popen(
-        [sys.executable, "-m", "middy._worker"],
+        [sys.executable, "-P", "-m", "middy._worker"],
+        cwd=tmp_path,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -1491,7 +1497,7 @@ def test_launcher_selection_is_lazy_and_reaches_the_shared_rust_binding(
     assert client.ports() == []
     assert seen["worker_program"] == "chosen-worker"
     assert seen["worker_args"] == (
-        ["-m", "middy._worker"] if worker == "python" else []
+        ["-P", "-m", "middy._worker"] if worker == "python" else []
     )
     assert seen["worker_timeout"] == 5
     client.close()

@@ -110,8 +110,10 @@ jobs:
         run: |
           if [[ "$RUNNER_OS" == Windows ]]; then
             export PYO3_PYTHON="$GITHUB_WORKSPACE/.venv/Scripts/python.exe"
+            export PYTHONPATH="$GITHUB_WORKSPACE/.venv/Lib/site-packages"
           else
             export PYO3_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python"
+            export PYTHONPATH="$GITHUB_WORKSPACE/.venv/lib/python${{ matrix.python }}/site-packages"
           fi
           cargo fmt --all --check
           cargo clippy --locked --workspace --all-targets -- -D warnings

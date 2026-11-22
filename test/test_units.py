@@ -130,8 +130,7 @@ def test_timecode_fields_and_clock_resolution_accept_units() -> None:
 
 @pytest.mark.parametrize("tempo", ["120 bpm", "500 ms / beat", "120"])
 def test_output_normalizes_tempo_without_opening_a_device(tempo: str) -> None:
-    with midi.Output(bpm=tempo) as output:
-        assert output.bpm == 120
+    assert midi.Output(bpm=tempo).bpm == 120
 
 
 @pytest.mark.parametrize("tempo", ["1 Hz", "0 bpm", "-1 ms / beat"])

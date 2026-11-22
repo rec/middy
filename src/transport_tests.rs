@@ -84,8 +84,11 @@ fn python_adapter_preserves_native_bytes_ump_clocks_and_owner_reuse() {
                     .unwrap()
                     .call((), Some(&fields))
                     .unwrap();
+                let prepared = crate::live::prepare_output(py, encoding, &command);
                 if encoding == Encoding::Bytes {
-                    outgoing.call_method1("send_command", (command,)).unwrap();
+                    outgoing
+                        .call_method1("send_byte_batch", (prepared.unwrap(),))
+                        .unwrap();
                     assert_eq!(received.len(), 3);
                     for (index, bytes) in [(1, [0xb0, 7, 78]), (2, [0xb0, 39, 16])] {
                         assert!(received
@@ -97,7 +100,7 @@ fn python_adapter_preserves_native_bytes_ump_clocks_and_owner_reuse() {
                             .unwrap());
                     }
                 } else {
-                    assert!(outgoing.call_method1("send_command", (command,)).is_err());
+                    assert!(prepared.is_err());
                     assert!(!outgoing.getattr("closed").unwrap().is_truthy().unwrap());
                 }
                 outgoing.call_method0("close").unwrap();
@@ -123,14 +126,6 @@ fn python_compound_error_retains_progress_and_invalidates_the_connection() {
     middy_coremidi_fixture::enable();
     Python::initialize();
     Python::attach(|py| {
-        // Exercise the real Python exception helper alongside the built package,
-        // as the pytest harness and uv-backed workspace checks do.
-        PyModule::import(py, "sys")
-            .unwrap()
-            .getattr("path")
-            .unwrap()
-            .call_method1("insert", (0, env!("CARGO_MANIFEST_DIR")))
-            .unwrap();
         crate::lifecycle::initialize(py).unwrap();
         let messages = PyModule::new(py, "middy.messages").unwrap();
         crate::messages::register(&messages).unwrap();
@@ -186,9 +181,10 @@ fn python_compound_error_retains_progress_and_invalidates_the_connection() {
             .unwrap()
             .call((), Some(&fields))
             .unwrap();
+        let prepared = crate::live::prepare_output(py, Encoding::Bytes, &command).unwrap();
         middy_coremidi_fixture::fail_send_after(endpoint, 1);
         let error = outgoing
-            .call_method1("send_command", (command,))
+            .call_method1("send_byte_batch", (prepared,))
             .unwrap_err();
         assert_eq!(
             error.get_type(py).name().unwrap(),

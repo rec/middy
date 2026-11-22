@@ -1020,11 +1020,14 @@ uv run --frozen ruff check --select B,E,F,I middy test
 uv run --frozen ruff format --check middy test
 uv run --frozen ty check middy test
 cargo fmt --all --check
-PYO3_PYTHON="$PWD/.venv/bin/python" cargo test --locked --workspace -- --test-threads=1
+PYO3_PYTHON="$PWD/.venv/bin/python" PYTHONPATH="$PWD/.venv/lib/python3.13/site-packages" \
+  cargo test --locked --workspace -- --test-threads=1
 uv run maturin build --release --locked --sdist --out dist
 ```
 
-On Windows set `PYO3_PYTHON` to `.venv/Scripts/python.exe`. Native software-port
+Use the site-packages directory matching the installed Python version. On
+Windows set `PYO3_PYTHON` to `.venv/Scripts/python.exe` and `PYTHONPATH` to
+`.venv/Lib/site-packages`. Native software-port
 checks in `test/manual/loopback.py` and `test/manual/windows.py` are explicit
 opt-ins and require target-host authorization. No unit test selects hardware.
 
